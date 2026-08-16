@@ -148,4 +148,13 @@ class PairingService {
         .map((r) => PairedDevice.fromJson(jsonDecode(r) as Map<String, dynamic>))
         .toList();
   }
+
+  /// Removes a paired device from this device's list (Settings -> Forget).
+  Future<void> forgetDevice(String deviceId) async {
+    final prefs = await SharedPreferences.getInstance();
+    final existing = prefs.getStringList(_storageKey) ?? [];
+    existing.removeWhere((raw) =>
+        (jsonDecode(raw) as Map<String, dynamic>)['deviceId'] == deviceId);
+    await prefs.setStringList(_storageKey, existing);
+  }
 }

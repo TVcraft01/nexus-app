@@ -100,6 +100,16 @@ flutter run -d android
   Downloads folder; on Android it's the app's own storage (see **Settings ->
   Received files** for the exact location).
 
+### 8. The Settings tab
+- Tap **Settings** at the bottom of the app.
+- **Allow internet access** and **Auto-update** are both **off by default**,
+  and stored on your device only. They don't change anything yet — they're
+  ready for features coming in a later phase.
+- **Paired devices** lists every device you've paired with; tap the trash icon
+  next to one to **forget** it.
+- **Received files** shows files other devices have sent you, including where
+  each one was saved.
+
 ---
 
 ## If something goes wrong

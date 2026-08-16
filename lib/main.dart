@@ -6,6 +6,7 @@ import 'models/paired_device.dart';
 import 'pairing/pairing_service.dart';
 import 'pairing/qr_pairing_screen.dart';
 import 'pairing/qr_scan_screen.dart';
+import 'settings/settings_screen.dart';
 import 'transfer/send_file_screen.dart';
 import 'transfer/transfer_service.dart';
 
@@ -43,6 +44,8 @@ class _MainScreenState extends State<MainScreen> {
   final _transferService = TransferService();
   StreamSubscription<ReceivedFile>? _receivedSub;
   List<PairedDevice> _devices = [];
+  List<ReceivedFile> _receivedFiles = [];
+  int _tab = 0;
 
   @override
   void initState() {
@@ -50,6 +53,7 @@ class _MainScreenState extends State<MainScreen> {
     _transferService.start();
     _receivedSub = _transferService.receivedFiles.listen(_onFileReceived);
     _loadDevices();
+    _loadReceivedFiles();
   }
 
   @override
@@ -64,8 +68,24 @@ class _MainScreenState extends State<MainScreen> {
     if (mounted) setState(() => _devices = devices);
   }
 
+  Future<void> _loadReceivedFiles() async {
+    final files = await _transferService.getReceivedFiles();
+    if (mounted) setState(() => _receivedFiles = files);
+  }
+
+  Future<void> _forgetDevice(String deviceId) async {
+    await _pairingService.forgetDevice(deviceId);
+    await _loadDevices();
+  }
+
+  Future<void> _clearReceived() async {
+    await _transferService.clearReceivedFiles();
+    if (mounted) setState(() => _receivedFiles = []);
+  }
+
   void _onFileReceived(ReceivedFile file) {
     if (!mounted) return;
+    setState(() => _receivedFiles.insert(0, file));
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
@@ -83,10 +103,35 @@ class _MainScreenState extends State<MainScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: HomeScreen(
-        devices: _devices,
-        onDevicesChanged: _loadDevices,
-        onDeviceTap: _openSendFile,
+      body: IndexedStack(
+        index: _tab,
+        children: [
+          HomeScreen(
+            devices: _devices,
+            onDevicesChanged: _loadDevices,
+            onDeviceTap: _openSendFile,
+          ),
+          SettingsScreen(
+            devices: _devices,
+            receivedFiles: _receivedFiles,
+            onForgetDevice: _forgetDevice,
+            onClearReceived: _clearReceived,
+          ),
+        ],
+      ),
+      bottomNavigationBar: NavigationBar(
+        selectedIndex: _tab,
+        onDestinationSelected: (i) => setState(() => _tab = i),
+        destinations: const [
+          NavigationDestination(
+            icon: Icon(Icons.devices),
+            label: 'Devices',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.settings),
+            label: 'Settings',
+          ),
+        ],
       ),
     );
   }
