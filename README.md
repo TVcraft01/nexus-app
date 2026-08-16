@@ -1,8 +1,13 @@
-# Nexus — QR Pairing Module (Phase 1, Feature 1)
+# Nexus — a local-first, cross-device personal system
 
-This is a working first piece of Nexus: two devices (Android + Debian Linux,
-built from one shared codebase) can pair with each other by scanning a QR
-code, entirely over the local network — no server, no internet required.
+Nexus is one app (Android + Debian Linux, built from a single codebase) that
+lets your own devices work together directly — no cloud, no account, no
+third-party server. Everything happens on your own local network.
+
+So far it can:
+- **Pair two devices** by scanning a QR code.
+- **Send files** between paired devices, with live progress.
+- **Manage** paired devices and preferences in a **Settings** tab.
 
 ---
 
@@ -21,6 +26,18 @@ code, entirely over the local network — no server, no internet required.
 5. Both devices now have each other stored locally (on-device storage only)
    as a paired device, ready for future features (file transfer, task
    splitting, etc.) to use.
+
+### File transfer (sending a file to a paired device)
+
+1. Every device keeps a small local web server open on port `51821` while
+   Nexus is running, ready to receive files.
+2. When you tap a paired device and pick a file, Nexus streams the file
+   straight to that device's IP/port over your Wi-Fi — the bytes never leave
+   your local network.
+3. The receiving device checks that the sender knows the secret pairing key
+   (so strangers on your network can't drop files on you), saves the file to
+   a `Nexus` folder, and shows a "File received" message.
+4. Progress is shown live on the sending device.
 
 No cloud, no account, no third-party server is involved at any point — this
 matches the "100% local, internet is an opt-in toggle" rule from the spec.
@@ -73,13 +90,26 @@ flutter run -d android
 - Point the camera at the first screen. You should see "Paired with..." on
   both devices within a couple seconds.
 
+### 7. Send a file
+- Make sure Nexus is open on both devices and they are paired.
+- On the sending device, tap the paired device in the list, then tap the
+  file card to choose a file, and tap **Send file**.
+- You'll see a progress bar while it transfers, and the other device shows a
+  "File received" message when it's done.
+- Received files are saved in a `Nexus` folder — on Linux that's inside your
+  Downloads folder; on Android it's the app's own storage (see **Settings ->
+  Received files** for the exact location).
+
 ---
 
 ## If something goes wrong
 
 - **"Could not pair" message:** almost always means the two devices aren't
-  on the same Wi-Fi network, or a firewall is blocking port `51820`. On
-  Debian, you may need to allow it: `sudo ufw allow 51820/tcp`.
+  on the same Wi-Fi network, or a firewall is blocking ports `51820` (QR
+  pairing) and `51821` (file transfer). On Debian, you may need to allow
+  them: `sudo ufw allow 51820/tcp && sudo ufw allow 51821/tcp`.
+- **File won't send:** same cause — make sure both devices are on the same
+  Wi-Fi and Nexus is open on the receiving device.
 - **Camera doesn't open on Android:** the app needs camera permission —
   Android should prompt for this automatically the first time; if not,
   enable it manually in Android's Settings -> Apps -> Nexus -> Permissions.
@@ -89,13 +119,13 @@ flutter run -d android
 
 ---
 
-## What's NOT built yet (intentionally — this is one feature at a time)
+## What's NOT built yet (intentionally)
 
-- File transfer between paired devices
-- The Settings tab / internet toggle
-- The local AI
-- Everything else in Phases 2–4 of the spec
+- The local AI assistant
+- Distributed task-splitting across devices
+- Sleep-cycle features
+- (These come later, once they're designed properly.)
 
-Next feature to build, whenever you're ready: **LAN file transfer between
-paired devices** — sending a file from one device to another using the
-pairing connection we just built.
+Note: the "Allow internet access" and "Auto-update" toggles in Settings are
+stored on-device but don't change behaviour yet — they're placeholders for
+features planned in a later phase.

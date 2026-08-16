@@ -15,6 +15,9 @@ dependencies:
   http: ^1.2.2                  # sends the handshake request to the other device
   shared_preferences: ^2.3.2   # stores the list of paired devices on-device
   uuid: ^4.5.1                  # generates this device's unique ID
+  file_picker: ^12.0.0       # lets the user choose a file to send
+  path_provider: ^2.1.6      # finds where to save received files
+  path: ^1.9.1               # safe filename/folder path handling
 
 dev_dependencies:
   flutter_test:
