@@ -1,0 +1,25 @@
+name: nexus_app
+description: Nexus - local-first cross-device system (QR pairing module)
+publish_to: 'none'
+version: 0.1.0
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  qr_flutter: ^4.1.0          # generates the QR code shown on-screen
+  mobile_scanner: ^5.2.3      # scans a QR code using the camera
+  shelf: ^1.4.1                # tiny local HTTP server for the pairing handshake
+  http: ^1.2.2                  # sends the handshake request to the other device
+  shared_preferences: ^2.3.2   # stores the list of paired devices on-device
+  uuid: ^4.5.1                  # generates this device's unique ID
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0  # recommended lint rules for the analyzer
+
+flutter:
+  uses-material-design: true
