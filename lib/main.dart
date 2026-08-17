@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import 'ai/talk_screen.dart';
 import 'models/paired_device.dart';
 import 'pairing/pairing_service.dart';
 import 'pairing/qr_pairing_screen.dart';
@@ -111,6 +112,7 @@ class _MainScreenState extends State<MainScreen> {
             onDevicesChanged: _loadDevices,
             onDeviceTap: _openSendFile,
           ),
+          const TalkScreen(),
           SettingsScreen(
             devices: _devices,
             receivedFiles: _receivedFiles,
@@ -126,6 +128,10 @@ class _MainScreenState extends State<MainScreen> {
           NavigationDestination(
             icon: Icon(Icons.devices),
             label: 'Devices',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.mic_none),
+            label: 'Talk',
           ),
           NavigationDestination(
             icon: Icon(Icons.settings),
