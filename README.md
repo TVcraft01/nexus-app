@@ -6,7 +6,13 @@ third-party server. Everything happens on your own local network.
 
 So far it can:
 - **Pair two devices** by scanning a QR code.
-- **Send files** between paired devices, with live progress.
+- **Send files** between paired devices with live progress, **encrypted**
+  end-to-end (AES-GCM) so no one else on the network can read them.
+- **Re-find a paired device** automatically if its local IP address changes
+  (e.g. after a router reboot).
+- **Take simple commands** in the **Talk to Nexus** tab — create a folder,
+  open Wi-Fi settings, or set a reminder — answered with on-device
+  text-to-speech.
 - **Manage** paired devices and preferences in a **Settings** tab.
 
 ---
@@ -35,12 +41,40 @@ So far it can:
    straight to that device's IP/port over your Wi-Fi — the bytes never leave
    your local network.
 3. The receiving device checks that the sender knows the secret pairing key
-   (so strangers on your network can't drop files on you), saves the file to
-   a `Nexus` folder, and shows a "File received" message.
-4. Progress is shown live on the sending device.
+   (so strangers on your network can't drop files on you), then decrypts the
+   file and saves it to a `Nexus` folder, showing a "File received" message.
+4. File contents are encrypted with AES-GCM using a key derived from that
+   pairing secret (via HKDF), so even someone who can watch your Wi-Fi
+   traffic can't read what you're sending. Tampered or truncated transfers
+   are detected and rejected.
+5. If a paired device's IP address has changed, Nexus first checks whether
+   the old address still answers; if not, it scans your local network for
+   that device and updates its address automatically before sending.
+6. Progress is shown live on the sending device.
 
 No cloud, no account, no third-party server is involved at any point — this
 matches the "100% local, internet is an opt-in toggle" rule from the spec.
+
+### Talk to Nexus (the offline assistant)
+
+The **Talk** tab accepts simple typed commands and answers aloud using the
+device's own text-to-speech engine. Everything runs on-device — nothing is
+sent anywhere. Try:
+
+- "create a folder" or "create a folder named Photos"
+- "open Wi-Fi settings"
+- "remind me to call Sam at 7 pm" or "remind me in 30 minutes"
+
+Reminders appear as a normal notification: on Android they are scheduled
+with the OS (so they fire even if the app is closed), while Linux's
+notification system has no scheduler, so there Nexus uses an in-app timer
+and the app must stay open.
+
+**Why no voice input yet:** the standard Android speech-to-text package
+hands your voice to Google's cloud recognizer, which would break the
+"nothing leaves your device" rule. Nexus keeps text input for now; a fully
+on-device speech engine (like Vosk) can be added later without changing the
+rest of the app.
 
 ---
 
@@ -110,6 +144,11 @@ flutter run -d android
 - **Received files** shows files other devices have sent you, including where
   each one was saved.
 
+### 9. The Talk tab
+- Tap **Talk** in the bottom bar and type a command (see the examples above).
+- The first time you set a reminder on Android 13+, allow the notification
+  permission when Nexus asks — reminders can't show without it.
+
 ---
 
 ## If something goes wrong
@@ -118,8 +157,15 @@ flutter run -d android
   on the same Wi-Fi network, or a firewall is blocking ports `51820` (QR
   pairing) and `51821` (file transfer). On Debian, you may need to allow
   them: `sudo ufw allow 51820/tcp && sudo ufw allow 51821/tcp`.
-- **File won't send:** same cause — make sure both devices are on the same
-  Wi-Fi and Nexus is open on the receiving device.
+- **File won't send:** make sure both devices are on the same Wi-Fi and Nexus
+  is open on the receiving device. If a device's IP changed, Nexus re-finds
+  it automatically; if that fails you'll see "Couldn't reach … — try
+  re-pairing", in which case pair the two devices again.
+- **Reminder didn't fire on Linux:** Linux can't schedule notifications while
+  the app is closed — keep Nexus open, or set the reminder on Android.
+- **No spoken replies on Linux:** make sure a text-to-speech engine is
+  installed (for example `sudo apt install speech-dispatcher`). Replies are
+  always shown as text regardless.
 - **Camera doesn't open on Android:** the app needs camera permission —
   Android should prompt for this automatically the first time; if not,
   enable it manually in Android's Settings -> Apps -> Nexus -> Permissions.
@@ -131,7 +177,9 @@ flutter run -d android
 
 ## What's NOT built yet (intentionally)
 
-- The local AI assistant
+- A real on-device language model and full voice input (the current assistant
+  is a small offline keyword parser — the groundwork is in place to swap in a
+  local LLM later).
 - Distributed task-splitting across devices
 - Sleep-cycle features
 - (These come later, once they're designed properly.)
