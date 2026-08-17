@@ -216,6 +216,9 @@ flutter run -d android
   offers to download it (the Compact model is ~941 MB). You can decline and
   stay in command mode, or change tiers later in **Settings -> Local
   assistant**.
+- **"Not now" snoozes the prompt for a few days** — Nexus won't re-ask on
+  every launch, but you can still set up a model at any time from
+  **Settings -> Local assistant** (the manual path ignores the snooze).
 - The download shows progress and can be cancelled. It needs free disk space
   of about 1.5x the model size.
 - Linux desktops often have the most free memory, so they may be offered the

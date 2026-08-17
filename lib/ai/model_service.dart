@@ -25,6 +25,10 @@ class ModelService extends ChangeNotifier {
   static const _kPath = 'ai_model_path';
   static const _kSize = 'ai_model_size';
   static const _kDeclined = 'ai_model_declined';
+  static const _kSnoozedUntil = 'ai_model_snoozed_until';
+
+  /// How long "Not now" defers the first-run model prompt.
+  static const snoozeDuration = Duration(days: 3);
 
   ModelState _state = ModelState.none;
   ModelTier? _tier;
@@ -32,6 +36,7 @@ class ModelService extends ChangeNotifier {
   int _downloadedBytes = 0;
   int _totalBytes = 0;
   bool _declined = false;
+  DateTime? _snoozedUntil;
   bool _cancelRequested = false;
 
   ModelState get state => _state;
@@ -40,6 +45,11 @@ class ModelService extends ChangeNotifier {
   bool get isReady => _state == ModelState.ready;
   bool get isDownloading => _state == ModelState.downloading;
   bool get declined => _declined;
+
+  /// True while a "Not now" snooze is still active, so the first-run prompt
+  /// stays quiet until the snooze expires (or the user re-engages manually).
+  bool get isSnoozed =>
+      _snoozedUntil != null && DateTime.now().isBefore(_snoozedUntil!);
   double get downloadProgress =>
       _totalBytes == 0 ? 0 : (_downloadedBytes / _totalBytes).clamp(0.0, 1.0);
   int get totalBytes => _totalBytes;
@@ -48,6 +58,9 @@ class ModelService extends ChangeNotifier {
   Future<void> init() async {
     final prefs = await SharedPreferences.getInstance();
     _declined = prefs.getBool(_kDeclined) ?? false;
+    final snoozedRaw = prefs.getString(_kSnoozedUntil);
+    _snoozedUntil =
+        snoozedRaw == null ? null : DateTime.tryParse(snoozedRaw);
     final tierId = prefs.getString(_kTier);
     _tier = ModelTier.all.where((t) => t.id == tierId).firstOrNull;
     _modelPath = prefs.getString(_kPath);
@@ -58,6 +71,26 @@ class ModelService extends ChangeNotifier {
     if (_state == ModelState.ready) {
       _totalBytes = prefs.getInt(_kSize) ?? _tier?.sizeBytes ?? 0;
     }
+    notifyListeners();
+  }
+
+  /// "Not now": defers the first-run prompt for [snoozeDuration] instead of
+  /// asking again on every launch. Distinct from [setDeclined], which is the
+  /// permanent "stay in command mode" opt-out.
+  Future<void> snoozePrompt() async {
+    _snoozedUntil = DateTime.now().add(snoozeDuration);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_kSnoozedUntil, _snoozedUntil!.toIso8601String());
+    notifyListeners();
+  }
+
+  /// Forgets any pending snooze, used when the user re-engages with model
+  /// setup (e.g. downloading from Settings) so an old snooze can't block the
+  /// prompt later.
+  Future<void> clearSnooze() async {
+    _snoozedUntil = null;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_kSnoozedUntil);
     notifyListeners();
   }
 
@@ -125,6 +158,7 @@ class ModelService extends ChangeNotifier {
       await prefs.setString(_kPath, target.path);
       await prefs.setInt(_kSize, actual);
       await prefs.setBool(_kDeclined, false);
+      await clearSnooze();
       notifyListeners();
     } on ModelDownloadCancelled {
       _state = ModelState.none;
@@ -172,11 +206,15 @@ class ModelService extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Persists "the user chose not to download a model for now".
+  /// Persists "the user chose not to download a model for now". Re-enabling
+  /// from Settings also cancels any pending "Not now" snooze.
   Future<void> setDeclined(bool value) async {
     _declined = value;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_kDeclined, value);
+    if (!value) {
+      await clearSnooze();
+    }
     notifyListeners();
   }
 }

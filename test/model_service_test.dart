@@ -60,6 +60,61 @@ void main() {
       await service2.init();
       expect(service2.declined, isTrue);
     });
+
+    test('snoozePrompt() defers the prompt and persists across init()',
+        () async {
+      SharedPreferences.setMockInitialValues({});
+      final service = ModelService();
+      await service.init();
+      expect(service.isSnoozed, isFalse,
+          reason: 'no snooze before the user taps Not now');
+
+      await service.snoozePrompt();
+      expect(service.isSnoozed, isTrue,
+          reason: 'the prompt should be quiet for the snooze window');
+
+      // A fresh service reading the same prefs also sees the snooze.
+      final service2 = ModelService();
+      await service2.init();
+      expect(service2.isSnoozed, isTrue);
+    });
+
+    test('an expired snooze no longer blocks the prompt', () async {
+      final expired =
+          DateTime.now().subtract(const Duration(days: 10)).toIso8601String();
+      SharedPreferences.setMockInitialValues({'ai_model_snoozed_until': expired});
+      final service = ModelService();
+      await service.init();
+      expect(service.isSnoozed, isFalse,
+          reason: 'a stale snooze timestamp must not suppress the prompt');
+    });
+
+    test('clearSnooze() forgets a pending snooze', () async {
+      SharedPreferences.setMockInitialValues({});
+      final service = ModelService();
+      await service.init();
+      await service.snoozePrompt();
+      expect(service.isSnoozed, isTrue);
+
+      await service.clearSnooze();
+      expect(service.isSnoozed, isFalse);
+
+      final service2 = ModelService();
+      await service2.init();
+      expect(service2.isSnoozed, isFalse,
+          reason: 'the cleared snooze must not come back after init()');
+    });
+
+    test('re-enabling from Settings cancels an active snooze', () async {
+      SharedPreferences.setMockInitialValues({});
+      final service = ModelService();
+      await service.init();
+      await service.snoozePrompt();
+      expect(service.isSnoozed, isTrue);
+
+      await service.setDeclined(false); // the Settings "Enable" path
+      expect(service.isSnoozed, isFalse);
+    });
   });
 
   group('pickTierFor', () {

@@ -89,14 +89,16 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   /// On first run, explains which model the device can handle and offers to
-  /// download it. The user can also pick a different tier or decline (staying
-  /// in command-mode KeywordBrain forever).
+  /// download it. The user can also pick a different tier, decline (staying
+  /// in command-mode KeywordBrain forever), or snooze it via "Not now" — the
+  /// prompt then stays quiet for a few days instead of re-asking every launch.
   Future<void> _maybeOfferModel() async {
     if (_offeredModel) return;
     _offeredModel = true;
     if (_modelService.declined ||
         _modelService.isReady ||
         _modelService.isDownloading ||
+        _modelService.isSnoozed ||
         !mounted) {
       return;
     }
@@ -152,8 +154,13 @@ class _MainScreenState extends State<MainScreen> {
       await _modelService.setDeclined(true);
       return;
     }
-    // 'notNow' (and null) intentionally leave _modelService.declined false so
-    // the dialog offers again on the next launch.
+    if (choice == 'notNow') {
+      // Not permanent: snooze the prompt for a few days so it doesn't nag on
+      // every launch. The user can still set up a model any time from
+      // Settings -> Local assistant.
+      await _modelService.snoozePrompt();
+      return;
+    }
     if (choice == 'pick' && recommended != null) {
       final tier = await pickModelTier(context, recommended: recommended);
       if (tier != null && mounted) {
