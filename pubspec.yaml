@@ -25,6 +25,10 @@ dependencies:
   flutter_tts: ^4.2.5
   android_intent_plus: ^6.1.0
   flutter_timezone: ^5.1.0
+  lib_llama_cpp: ^0.7.3
+  record: ^7.1.1
+  archive: ^4.0.9
+  ffi: ^2.2.0
 
 dev_dependencies:
   flutter_test:
