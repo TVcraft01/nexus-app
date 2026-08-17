@@ -12,6 +12,7 @@ import 'package:shelf/shelf.dart';
 import 'package:shelf/shelf_io.dart' as shelf_io;
 
 import '../models/paired_device.dart';
+import '../pairing/pairing_service.dart';
 
 /// A file that arrived on this device over the local network.
 class ReceivedFile {
@@ -56,6 +57,7 @@ class ReceivedFile {
 class TransferService {
   static const receivePort = 51821;
   static const _historyKey = 'nexus_received_files';
+  static const _deviceIdKey = 'nexus_device_id';
   static const _deviceNameKey = 'nexus_device_name';
   static const _pairedKey = 'nexus_paired_devices';
 
@@ -69,14 +71,15 @@ class TransferService {
 
   static final _aes = AesGcm.with256bits();
 
+  final _pairing = PairingService();
   HttpServer? _server;
   final _receivedController = StreamController<ReceivedFile>.broadcast();
 
   /// Emits whenever a file finishes arriving on this device.
   Stream<ReceivedFile> get receivedFiles => _receivedController.stream;
 
-  /// Starts the local server that accepts incoming files. Safe to call at
-  /// app start; it only binds once.
+  /// Starts the local server that accepts incoming files and answers
+  /// reachability "ping"s. Safe to call at app start; it only binds once.
   Future<void> start() async {
     if (_server != null) return;
     final handler = const Pipeline().addHandler(_handleRequest);
@@ -91,6 +94,17 @@ class TransferService {
   }
 
   Future<Response> _handleRequest(Request request) async {
+    // Lightweight liveness probe used for the stale-IP recovery in sendFile.
+    if (request.method == 'GET' && request.url.path == 'ping') {
+      return Response.ok(
+        jsonEncode({
+          'deviceId': await _thisDeviceId(),
+          'deviceName': await _thisDeviceName(),
+        }),
+        headers: {'content-type': 'application/json'},
+      );
+    }
+
     if (request.method != 'POST' || request.url.path != 'receive') {
       return Response.notFound('not found');
     }
@@ -138,6 +152,10 @@ class TransferService {
 
   /// Pushes [filePath] directly to [target], encrypted with AES-GCM.
   /// [onProgress] reports 0.0..1.0 as plaintext bytes are processed.
+  ///
+  /// If the stored IP no longer answers, Nexus quickly scans the local subnet
+  /// for a Nexus instance with the same device ID and retries with the fresh
+  /// IP before giving up.
   Future<void> sendFile({
     required PairedDevice target,
     required String filePath,
@@ -148,19 +166,30 @@ class TransferService {
       throw Exception('That file no longer exists.');
     }
 
+    var effective = target;
+    if (!await _isReachable(target)) {
+      final newIp = await _discoverIp(target);
+      if (newIp == null) {
+        throw Exception(
+            'Couldn\'t reach ${target.deviceName} — try re-pairing.');
+      }
+      await _pairing.updateDeviceIp(target.deviceId, newIp);
+      effective = target.copyWith(ipAddress: newIp);
+    }
+
     final senderName = await _thisDeviceName();
-    final keyBytes = base64Decode(target.transferKey);
+    final keyBytes = base64Decode(effective.transferKey);
 
     final client = HttpClient()..connectionTimeout = const Duration(seconds: 8);
     try {
       final request = await client.postUrl(
-        Uri.parse('http://${target.ipAddress}:$receivePort/receive'),
+        Uri.parse('http://${effective.ipAddress}:$receivePort/receive'),
       );
       request.headers.set('content-type', 'application/octet-stream');
       request.headers.set(
           'x-nexus-filename', Uri.encodeComponent(p.basename(filePath)));
       request.headers.set('x-nexus-sender', senderName);
-      request.headers.set('x-nexus-key', target.pairingKey);
+      request.headers.set('x-nexus-key', effective.pairingKey);
 
       await request
           .addStream(_encryptedBody(file, keyBytes, onProgress: onProgress));
@@ -268,6 +297,102 @@ class TransferService {
     }
   }
 
+  // ---- reachability + re-discovery ----------------------------------------
+
+  /// True only if a Nexus instance answering at the stored IP reports the same
+  /// device ID. This prevents sending a file to the wrong device that happened
+  /// to grab the old IP.
+  Future<bool> _isReachable(PairedDevice target) async {
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 2);
+    try {
+      final request = await client
+          .getUrl(Uri.parse('http://${target.ipAddress}:$receivePort/ping'));
+      final response = await request.close().timeout(const Duration(seconds: 2));
+      if (response.statusCode != 200) return false;
+      final body = await response
+          .transform(utf8.decoder)
+          .join()
+          .timeout(const Duration(seconds: 2));
+      final json = jsonDecode(body) as Map<String, dynamic>;
+      return json['deviceId'] == target.deviceId;
+    } catch (_) {
+      return false;
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  /// Scans the last-known subnet (and our current one) for the target device,
+  /// returning its current IP if found.
+  Future<String?> _discoverIp(PairedDevice target) async {
+    final subnets = <String>{};
+    final stored = _subnetBase(target.ipAddress);
+    if (stored != null) subnets.add(stored);
+    final mine = _subnetBase(await _localIpAddress() ?? '');
+    if (mine != null) subnets.add(mine);
+
+    for (final subnet in subnets) {
+      final found = await _scanSubnet(subnet, target.deviceId);
+      if (found != null) return found;
+    }
+    return null;
+  }
+
+  /// Assumes a /24 home network (the common case) and probes hosts .1..254 in
+  /// parallel batches with a very short timeout.
+  Future<String?> _scanSubnet(String base, String deviceId) async {
+    for (var batchStart = 1; batchStart <= 254; batchStart += 64) {
+      final batch = <Future<String?>>[];
+      for (var i = batchStart; i < batchStart + 64 && i <= 254; i++) {
+        batch.add(_probe('$base.$i', deviceId));
+      }
+      final results = await Future.wait(batch);
+      final matches = results.whereType<String>();
+      if (matches.isNotEmpty) return matches.first;
+    }
+    return null;
+  }
+
+  Future<String?> _probe(String ip, String deviceId) async {
+    final client =
+        HttpClient()..connectionTimeout = const Duration(milliseconds: 300);
+    try {
+      final request =
+          await client.getUrl(Uri.parse('http://$ip:$receivePort/ping'));
+      final response =
+          await request.close().timeout(const Duration(milliseconds: 400));
+      if (response.statusCode != 200) return null;
+      final body = await response
+          .transform(utf8.decoder)
+          .join()
+          .timeout(const Duration(milliseconds: 400));
+      final json = jsonDecode(body) as Map<String, dynamic>;
+      return json['deviceId'] == deviceId ? ip : null;
+    } catch (_) {
+      return null;
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  String? _subnetBase(String ip) {
+    final parts = ip.split('.');
+    if (parts.length != 4) return null;
+    return '${parts[0]}.${parts[1]}.${parts[2]}';
+  }
+
+  Future<String?> _localIpAddress() async {
+    for (final interface in await NetworkInterface.list(
+      type: InternetAddressType.IPv4,
+      includeLoopback: false,
+    )) {
+      for (final addr in interface.addresses) {
+        if (!addr.isLoopback) return addr.address;
+      }
+    }
+    return null;
+  }
+
   // ---- helpers ------------------------------------------------------------
 
   Future<PairedDevice?> _deviceForPairingKey(String key) async {
@@ -280,6 +405,11 @@ class TransferService {
       }
     }
     return null;
+  }
+
+  Future<String> _thisDeviceId() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_deviceIdKey) ?? '';
   }
 
   Future<String> _thisDeviceName() async {

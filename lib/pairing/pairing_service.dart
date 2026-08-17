@@ -163,4 +163,19 @@ class PairingService {
     await prefs.setStringList(_storageKey, existing);
   }
 
+  /// Updates a paired device's stored IP address after it was re-discovered
+  /// on the local network (DHCP lease changes). Preserves the shared secret.
+  Future<void> updateDeviceIp(String deviceId, String newIp) async {
+    final prefs = await SharedPreferences.getInstance();
+    final existing = prefs.getStringList(_storageKey) ?? [];
+    final updated = <String>[];
+    for (final raw in existing) {
+      final map = jsonDecode(raw) as Map<String, dynamic>;
+      if (map['deviceId'] == deviceId) {
+        map['ipAddress'] = newIp;
+      }
+      updated.add(jsonEncode(map));
+    }
+    await prefs.setStringList(_storageKey, updated);
+  }
 }
