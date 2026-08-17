@@ -63,6 +63,7 @@ void main() {
   });
 
   group('pickTierFor', () {
+    const gb = 1024 * 1024 * 1024;
     DeviceCapability cap({required int freeRam, required int freeDisk}) =>
         DeviceCapability(
           freeRamBytes: freeRam,
@@ -71,37 +72,31 @@ void main() {
         );
 
     test('returns null when free RAM is below the compact threshold', () {
-      expect(
-        pickTierFor(cap(
-          freeRam: 2 * 1024 * 1024 * 1024,
-          freeDisk: 100 * 1024 * 1024 * 1024,
-        )),
-        isNull,
-      );
+      expect(pickTierFor(cap(freeRam: 2 * gb, freeDisk: 100 * gb)), isNull);
     });
 
-    test('returns compact with sufficient RAM and disk', () {
-      expect(
-        pickTierFor(cap(
-          freeRam: 4 * 1024 * 1024 * 1024,
-          freeDisk: 100 * 1024 * 1024 * 1024,
-        ))?.id,
-        'compact',
-      );
+    test('offers Compact when only the smallest tier fits', () {
+      // 3.5 GB free RAM: fits Compact (3 GB) but not Balanced (4 GB).
+      expect(pickTierFor(cap(freeRam: 7 * gb ~/ 2, freeDisk: 100 * gb))?.id,
+          'compact');
     });
 
-    test('returns compact on a high-RAM device (smallest-first, documented)', () {
-      // pickTierFor currently returns the *smallest* tier that fits, not the
-      // largest. The adaptive-model spec implied "largest that fits", so this
-      // may be inverted; left unchanged here to keep this change focused on
-      // the three test-pass bugs. See the pickTierFor doc comment.
-      expect(
-        pickTierFor(cap(
-          freeRam: 8 * 1024 * 1024 * 1024,
-          freeDisk: 10 * 1024 * 1024 * 1024,
-        ))?.id,
-        'compact',
-      );
+    test('offers Balanced on a mid-range device', () {
+      // 5 GB free RAM: fits Balanced (4 GB) but not Large (7 GB).
+      expect(pickTierFor(cap(freeRam: 5 * gb, freeDisk: 100 * gb))?.id,
+          'balanced');
+    });
+
+    test('offers Large on a high-RAM device', () {
+      expect(pickTierFor(cap(freeRam: 32 * gb, freeDisk: 100 * gb))?.id,
+          'large');
+    });
+
+    test('falls back to Balanced when RAM fits Large but disk does not', () {
+      // Large needs ~7 GB free disk (4.4 GB * 1.5); 5 GB is not enough, so
+      // the largest tier that satisfies every requirement is Balanced.
+      expect(pickTierFor(cap(freeRam: 32 * gb, freeDisk: 5 * gb))?.id,
+          'balanced');
     });
   });
 }

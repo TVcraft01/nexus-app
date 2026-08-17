@@ -145,11 +145,15 @@ int freeDiskBytesFor(String path) {
   }
 }
 
-/// Picks the best tier for this device. Returns null when even the smallest
-/// model can't run (the app stays in command-mode KeywordBrain, which is the
-/// guaranteed floor on any hardware).
+/// Picks the best tier for this device: the LARGEST model it can actually
+/// sustain, so more capable devices get a better assistant rather than the
+/// minimum. Returns null when even the smallest model can't run (the app
+/// stays in command-mode KeywordBrain, which is the guaranteed floor on any
+/// hardware). The user can still override downward from Settings — this only
+/// sets the default/first-run recommendation.
 ModelTier? pickTierFor(DeviceCapability cap) {
-  for (final tier in ModelTier.all) {
+  // Largest-first so a high-RAM device is offered Large, not Compact.
+  for (final tier in ModelTier.all.reversed) {
     if (cap.freeRamBytes >= tier.minFreeRamBytes &&
         cap.freeDiskBytes >= tier.minFreeDiskBytes) {
       return tier;
