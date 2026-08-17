@@ -18,6 +18,13 @@ dependencies:
   file_picker: ^12.0.0       # lets the user choose a file to send
   path_provider: ^2.1.6      # finds where to save received files
   path: ^1.9.1               # safe filename/folder path handling
+  cryptography: ^2.9.0
+  crypto: ^3.0.7
+  flutter_local_notifications: ^22.3.0
+  timezone: ^0.11.1
+  flutter_tts: ^4.2.5
+  android_intent_plus: ^6.1.0
+  flutter_timezone: ^5.1.0
 
 dev_dependencies:
   flutter_test:

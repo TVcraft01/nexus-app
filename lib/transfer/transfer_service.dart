@@ -1,7 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
+import 'dart:typed_data';
 
+import 'package:cryptography/cryptography.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -46,14 +49,25 @@ class ReceivedFile {
 /// Sends files to, and receives files from, paired Nexus devices — always
 /// direct device-to-device over the local network. No cloud, no relay.
 ///
-/// Every device runs a small receive-only HTTP server on [receivePort] while
-/// the app is open, so a paired device can push a file straight to it. The
-/// sender must present the pairing key we exchanged during QR pairing, which
-/// stops random devices on the network from dropping files on us.
+/// Every device runs a small HTTP server on [receivePort] while the app is
+/// open, so a paired device can push a file straight to it. The sender must
+/// present the pairing key we exchanged during QR pairing, and the file body
+/// is encrypted with AES-GCM using a key derived from that shared secret.
 class TransferService {
   static const receivePort = 51821;
   static const _historyKey = 'nexus_received_files';
   static const _deviceNameKey = 'nexus_device_name';
+  static const _pairedKey = 'nexus_paired_devices';
+
+  // Wire format for an encrypted transfer: 6-byte magic, 4-byte plaintext
+  // length, then repeating chunks of nonce | ciphertext-length | ciphertext |
+  // GCM tag.
+  static const _magic = 'NEXUS1';
+  static const _nonceLength = 12;
+  static const _macLength = 16;
+  static const _chunkSize = 1024 * 1024; // 1 MiB of plaintext per chunk
+
+  static final _aes = AesGcm.with256bits();
 
   HttpServer? _server;
   final _receivedController = StreamController<ReceivedFile>.broadcast();
@@ -62,7 +76,7 @@ class TransferService {
   Stream<ReceivedFile> get receivedFiles => _receivedController.stream;
 
   /// Starts the local server that accepts incoming files. Safe to call at
-  /// app start; it only binds the port once.
+  /// app start; it only binds once.
   Future<void> start() async {
     if (_server != null) return;
     final handler = const Pipeline().addHandler(_handleRequest);
@@ -82,9 +96,11 @@ class TransferService {
     }
 
     final key = request.headers['x-nexus-key'] ?? '';
-    if (!await _isPairedKey(key)) {
+    final device = await _deviceForPairingKey(key);
+    if (device == null) {
       return Response.forbidden('device not paired');
     }
+    final keyBytes = base64Decode(device.transferKey);
 
     final rawName = request.headers['x-nexus-filename'] ?? 'received_file';
     final fileName = _safeFileName(rawName);
@@ -93,14 +109,15 @@ class TransferService {
     final dir = await _receiveDir();
     final dest = _uniquePath(File(p.join(dir.path, fileName)));
 
-    final sink = dest.openWrite();
     try {
-      await for (final chunk in request.read()) {
-        sink.add(chunk);
-      }
-      await sink.flush();
-    } finally {
-      await sink.close();
+      await _decryptToFile(request.read(), dest, keyBytes);
+    } catch (_) {
+      // Never keep bytes that failed authentication.
+      if (await dest.exists()) await dest.delete();
+      return Response.badRequest(
+        body: jsonEncode({'status': 'error', 'message': 'decryption failed'}),
+        headers: {'content-type': 'application/json'},
+      );
     }
 
     final received = ReceivedFile(
@@ -119,8 +136,8 @@ class TransferService {
     );
   }
 
-  /// Pushes [filePath] directly to [target]. [onProgress] reports 0.0..1.0
-  /// as the bytes leave this device.
+  /// Pushes [filePath] directly to [target], encrypted with AES-GCM.
+  /// [onProgress] reports 0.0..1.0 as plaintext bytes are processed.
   Future<void> sendFile({
     required PairedDevice target,
     required String filePath,
@@ -130,8 +147,9 @@ class TransferService {
     if (!await file.exists()) {
       throw Exception('That file no longer exists.');
     }
-    final size = await file.length();
+
     final senderName = await _thisDeviceName();
+    final keyBytes = base64Decode(target.transferKey);
 
     final client = HttpClient()..connectionTimeout = const Duration(seconds: 8);
     try {
@@ -141,18 +159,11 @@ class TransferService {
       request.headers.set('content-type', 'application/octet-stream');
       request.headers.set(
           'x-nexus-filename', Uri.encodeComponent(p.basename(filePath)));
-      request.headers.set('x-nexus-size', '$size');
       request.headers.set('x-nexus-sender', senderName);
       request.headers.set('x-nexus-key', target.pairingKey);
 
-      var sent = 0;
-      final stream = file.openRead().map((chunk) {
-        sent += chunk.length;
-        onProgress?.call(size == 0 ? 1.0 : sent / size);
-        return chunk;
-      });
-
-      await request.addStream(stream);
+      await request
+          .addStream(_encryptedBody(file, keyBytes, onProgress: onProgress));
       final response = await request.close();
 
       if (response.statusCode != 200) {
@@ -162,25 +173,118 @@ class TransferService {
       }
       await response.drain<void>();
     } on SocketException {
-      throw Exception(
-          'Could not reach ${target.deviceName}. Make sure it is on the same '
-          'Wi-Fi network with Nexus open.');
+      throw Exception('Could not reach ${target.deviceName}. Make sure it is '
+          'on the same Wi-Fi network with Nexus open.');
     } finally {
       client.close(force: true);
     }
   }
 
+  // ---- encryption (sender side) -------------------------------------------
+
+  Stream<List<int>> _encryptedBody(
+    File file,
+    List<int> keyBytes, {
+    void Function(double progress)? onProgress,
+  }) async* {
+    yield ascii.encode(_magic);
+    final size = await file.length();
+    yield _uint32(size);
+
+    var offset = 0;
+    while (offset < size) {
+      final end = min(offset + _chunkSize, size);
+      final plain = await _readRange(file, offset, end);
+      final box = await _aes.encrypt(
+        plain,
+        secretKey: SecretKey(keyBytes),
+        nonce: _aes.newNonce(),
+      );
+      yield Uint8List.fromList(box.nonce);
+      yield _uint32(box.cipherText.length);
+      yield Uint8List.fromList(box.cipherText);
+      yield Uint8List.fromList(box.mac.bytes);
+      offset = end;
+      onProgress?.call(size == 0 ? 1.0 : offset / size);
+    }
+  }
+
+  Future<Uint8List> _readRange(File file, int start, int end) async {
+    final builder = BytesBuilder(copy: false);
+    await for (final chunk in file.openRead(start, end)) {
+      builder.add(chunk);
+    }
+    return builder.toBytes();
+  }
+
+  Uint8List _uint32(int value) {
+    final bytes = Uint8List(4);
+    ByteData.sublistView(bytes).setUint32(0, value, Endian.big);
+    return bytes;
+  }
+
+  // ---- decryption (receiver side) -----------------------------------------
+
+  Future<void> _decryptToFile(
+    Stream<List<int>> stream,
+    File dest,
+    List<int> keyBytes,
+  ) async {
+    final reader = _BodyReader(stream);
+
+    final magic = await reader.readBytes(6);
+    if (magic == null || ascii.decode(magic) != _magic) {
+      throw StateError('not an encrypted transfer');
+    }
+    final total = await reader.readUint32();
+    if (total == null) throw StateError('truncated envelope');
+
+    final sink = dest.openWrite();
+    try {
+      var written = 0;
+      while (written < total) {
+        final nonce = await reader.readBytes(_nonceLength);
+        final len = await reader.readUint32();
+        final cipherText = len == null ? null : await reader.readBytes(len);
+        final macBytes = await reader.readBytes(_macLength);
+        if (nonce == null || len == null || cipherText == null || macBytes == null) {
+          throw StateError('truncated transfer');
+        }
+
+        // Throws SecretBoxAuthenticationError if the tag does not match.
+        final clear = await _aes.decrypt(
+          SecretBox(cipherText, nonce: nonce, mac: Mac(macBytes)),
+          secretKey: SecretKey(keyBytes),
+        );
+
+        if (written + clear.length > total) {
+          throw StateError('transfer larger than declared');
+        }
+        sink.add(clear);
+        written += clear.length;
+      }
+    } finally {
+      await sink.close();
+    }
+  }
+
+  // ---- helpers ------------------------------------------------------------
+
+  Future<PairedDevice?> _deviceForPairingKey(String key) async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getStringList(_pairedKey) ?? [];
+    for (final r in raw) {
+      final map = jsonDecode(r) as Map<String, dynamic>;
+      if (map['pairingKey'] == key) {
+        return PairedDevice.fromJson(map);
+      }
+    }
+    return null;
+  }
+
   Future<String> _thisDeviceName() async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getString(_deviceNameKey) ?? Platform.operatingSystem;
-  }
-
-  Future<bool> _isPairedKey(String key) async {
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getStringList('nexus_paired_devices') ?? [];
-    return raw.any(
-      (r) => (jsonDecode(r) as Map<String, dynamic>)['pairingKey'] == key,
-    );
   }
 
   Future<Directory> _receiveDir() async {
@@ -243,5 +347,37 @@ class TransferService {
       i++;
     } while (candidate.existsSync());
     return candidate;
+  }
+}
+
+/// Reads exact byte counts out of a byte stream, buffering whatever arrives in
+/// arbitrary chunk sizes.
+class _BodyReader {
+  final StreamIterator<List<int>> _it;
+  final List<int> _buffer = [];
+
+  _BodyReader(Stream<List<int>> stream) : _it = StreamIterator(stream);
+
+  Future<bool> _fill(int n) async {
+    while (_buffer.length < n) {
+      if (!await _it.moveNext()) return false;
+      _buffer.addAll(_it.current);
+    }
+    return true;
+  }
+
+  /// Returns exactly [n] bytes, or null if the stream ends early.
+  Future<List<int>?> readBytes(int n) async {
+    if (!await _fill(n)) return null;
+    final out = _buffer.sublist(0, n);
+    _buffer.removeRange(0, n);
+    return out;
+  }
+
+  Future<int?> readUint32() async {
+    final bytes = await readBytes(4);
+    if (bytes == null) return null;
+    return ByteData.sublistView(Uint8List.fromList(bytes))
+        .getUint32(0, Endian.big);
   }
 }

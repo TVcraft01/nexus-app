@@ -88,8 +88,13 @@ class PairingService {
         return Response.forbidden('pairing key mismatch');
       }
 
-      await _saveDevice(incoming);
-      onPaired(incoming);
+      // Both devices must end up storing the SAME shared secret so they can
+      // later derive the same transfer-encryption key. The secret embedded in
+      // the QR code is the one both sides know, so we persist the peer using
+      // OUR key rather than the key the peer generated for itself.
+      final shared = incoming.copyWith(pairingKey: thisDevice.pairingKey);
+      await _saveDevice(shared);
+      onPaired(shared);
 
       // Reply with our own identity so the scanning device saves us too.
       return Response.ok(jsonEncode(thisDevice.toJson()),
@@ -157,4 +162,5 @@ class PairingService {
         (jsonDecode(raw) as Map<String, dynamic>)['deviceId'] == deviceId);
     await prefs.setStringList(_storageKey, existing);
   }
+
 }
