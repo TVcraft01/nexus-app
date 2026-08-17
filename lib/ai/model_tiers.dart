@@ -176,5 +176,13 @@ final class _StatVfs extends Struct {
   external int fBfree;
   @Uint64()
   external int fBavail;
-  // Remaining statvfs fields (files/inodes/flags) are not needed.
+
+  // statvfs(3) writes the FULL struct (112 bytes on glibc x86_64, 88 on
+  // Android bionic) no matter how few fields we read. The buffer must be at
+  // least as large as the platform's struct or the C call overflows the
+  // allocation and corrupts the heap — observed as "free(): invalid next
+  // size" when the app started on Linux. The unused tail is padding.
+  @Array(128)
+  // ignore: unused_field
+  external Array<Uint8> _padding;
 }
