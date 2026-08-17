@@ -1,25 +1,53 @@
 import 'package:flutter/material.dart';
 
 import 'keyword_brain.dart';
+import 'llm_brain.dart';
+import 'model_service.dart';
 import 'nexus_action_runner.dart';
 import 'nexus_brain.dart';
+import 'vosk_service.dart';
 
-/// The "Talk to Nexus" entry point. Type a command, and Nexus decides what it
-/// means using the offline keyword brain, performs the action, and speaks the
-/// reply using the device's on-device text-to-speech engine.
+/// The "Talk to Nexus" entry point: type a command, or tap the mic and speak.
+/// Nexus decides what it means with the local brain (the downloaded LLM when
+/// one is installed, otherwise the offline keyword parser), performs the
+/// action, and speaks the reply using the device's on-device text-to-speech.
 class TalkScreen extends StatefulWidget {
-  const TalkScreen({super.key});
+  final ModelService modelService;
+  final VoskService voskService;
+
+  const TalkScreen({
+    super.key,
+    required this.modelService,
+    required this.voskService,
+  });
 
   @override
   State<TalkScreen> createState() => _TalkScreenState();
 }
 
 class _TalkScreenState extends State<TalkScreen> {
-  final NexusBrain _brain = KeywordBrain();
-  final _runner = NexusActionRunner();
-  final _controller = TextEditingController();
-  final _messages = <({bool fromUser, String text})>[];
+  final NexusActionRunner _runner = NexusActionRunner();
+  final TextEditingController _controller = TextEditingController();
+  final List<({bool fromUser, String text})> _messages = [];
   bool _busy = false;
+
+  LlmBrain? _llmBrain;
+  String? _llmBrainModelPath;
+
+  NexusBrain get _brain {
+    final model = widget.modelService;
+    if (model.isReady && model.modelPath != null) {
+      if (_llmBrain == null || _llmBrainModelPath != model.modelPath) {
+        _llmBrain = LlmBrain(
+          modelPath: model.modelPath!,
+          contextSize: model.tier?.contextSize ?? 2048,
+        );
+        _llmBrainModelPath = model.modelPath;
+      }
+      return _llmBrain!;
+    }
+    return KeywordBrain();
+  }
 
   @override
   void dispose() {
@@ -48,21 +76,42 @@ class _TalkScreenState extends State<TalkScreen> {
     });
   }
 
-  void _showVoiceNote() {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text(
-          'Voice input needs an on-device speech engine. The common Android '
-          'speech package sends your voice to Google, so Nexus keeps text '
-          'input for now to stay 100% local. Type your command instead.',
+  Future<void> _toggleListening() async {
+    final vosk = widget.voskService;
+    if (vosk.listening.value) {
+      await vosk.stopListening();
+      return;
+    }
+    // If the speech model isn't downloaded yet, let the user know and show
+    // progress while it fetches (~41 MB, once).
+    if (!vosk.modelReady && vosk.downloadProgress.value < 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Downloading the offline speech model (41 MB)…'),
+          duration: Duration(seconds: 2),
         ),
-      ),
+      );
+    }
+    await vosk.startListening(
+      onPartial: (partial) {
+        if (mounted) _controller.text = partial;
+      },
+      onResult: (result) {
+        if (mounted) _submit(result);
+      },
+      onError: (error) {
+        if (mounted) {
+          ScaffoldMessenger.of(context)
+              .showSnackBar(SnackBar(content: Text(error)));
+        }
+      },
     );
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final vosk = widget.voskService;
     return Scaffold(
       appBar: AppBar(title: const Text('Talk to Nexus')),
       body: Column(
@@ -74,9 +123,9 @@ class _TalkScreenState extends State<TalkScreen> {
                 leading: const Icon(Icons.lock_outline),
                 title: const Text('Runs entirely on this device'),
                 subtitle: Text(
-                  'Try "create a folder", "open Wi-Fi settings", or '
-                  '"remind me to call Sam at 7 pm". Nothing is sent to a '
-                  'server.',
+                  'Type a command, or tap the mic and speak. '
+                  'Nothing is sent to a server. Try "create a folder", '
+                  '"open Wi-Fi settings", or "remind me to call Sam at 7 pm".',
                   style: theme.textTheme.bodySmall,
                 ),
               ),
@@ -86,7 +135,7 @@ class _TalkScreenState extends State<TalkScreen> {
             child: _messages.isEmpty
                 ? Center(
                     child: Text(
-                      'Type a command below to get started.',
+                      'Type or speak a command below to get started.',
                       style: theme.textTheme.bodyLarge,
                     ),
                   )
@@ -121,10 +170,18 @@ class _TalkScreenState extends State<TalkScreen> {
               padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
               child: Row(
                 children: [
-                  IconButton(
-                    icon: const Icon(Icons.mic_none),
-                    tooltip: 'Voice input',
-                    onPressed: _showVoiceNote,
+                  ValueListenableBuilder<bool>(
+                    valueListenable: vosk.listening,
+                    builder: (context, listening, _) {
+                      return IconButton(
+                        icon: Icon(
+                          listening ? Icons.mic : Icons.mic_none,
+                          color: listening ? theme.colorScheme.error : null,
+                        ),
+                        tooltip: listening ? 'Stop listening' : 'Voice input',
+                        onPressed: _toggleListening,
+                      );
+                    },
                   ),
                   Expanded(
                     child: TextField(
@@ -132,10 +189,22 @@ class _TalkScreenState extends State<TalkScreen> {
                       enabled: !_busy,
                       textInputAction: TextInputAction.send,
                       onSubmitted: _submit,
-                      decoration: const InputDecoration(
+                      decoration: InputDecoration(
                         hintText: 'Type a command…',
-                        border: OutlineInputBorder(),
+                        border: const OutlineInputBorder(),
                         isDense: true,
+                        suffixIcon: ValueListenableBuilder<String>(
+                          valueListenable: vosk.partialText,
+                          builder: (context, partial, _) => partial.isEmpty
+                              ? const SizedBox.shrink()
+                              : Padding(
+                                  padding: const EdgeInsets.all(10),
+                                  child: Text(
+                                    '…listening',
+                                    style: theme.textTheme.labelSmall,
+                                  ),
+                                ),
+                        ),
                       ),
                     ),
                   ),

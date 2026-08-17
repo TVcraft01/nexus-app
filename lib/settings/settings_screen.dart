@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../ai/model_service.dart';
+import '../ai/model_ui.dart';
 import '../models/paired_device.dart';
 import '../transfer/transfer_service.dart';
 import 'settings_service.dart';
@@ -9,6 +11,7 @@ import 'settings_service.dart';
 class SettingsScreen extends StatefulWidget {
   final List<PairedDevice> devices;
   final List<ReceivedFile> receivedFiles;
+  final ModelService modelService;
   final Future<void> Function(String deviceId) onForgetDevice;
   final Future<void> Function() onClearReceived;
 
@@ -16,6 +19,7 @@ class SettingsScreen extends StatefulWidget {
     super.key,
     required this.devices,
     required this.receivedFiles,
+    required this.modelService,
     required this.onForgetDevice,
     required this.onClearReceived,
   });
@@ -114,6 +118,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   },
           ),
           const Divider(),
+          _sectionHeader('Local assistant'),
+          _buildModelSection(context),
+          const Divider(),
           _sectionHeader('Paired devices'),
           if (widget.devices.isEmpty)
             const Padding(
@@ -177,6 +184,118 @@ class _SettingsScreenState extends State<SettingsScreen> {
               letterSpacing: 1.2,
             ),
       ),
+    );
+  }
+
+  /// Shows the local LLM's tier/download state and lets the user switch or
+  /// delete it. Also surfaces whether the offline voice model is available.
+  Widget _buildModelSection(BuildContext context) {
+    return ListenableBuilder(
+      listenable: widget.modelService,
+      builder: (context, _) {
+        final model = widget.modelService;
+        Widget tile;
+
+        if (model.isDownloading) {
+          tile = ListTile(
+            leading: const SizedBox(
+              width: 24,
+              height: 24,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+            title: Text('Downloading ${model.tier?.name} model…'),
+            subtitle: Text(
+              '${(model.downloadProgress * 100).toStringAsFixed(0)}% of '
+              '${model.tier?.sizeLabel ?? ''}',
+            ),
+          );
+        } else if (model.isReady) {
+          tile = ListTile(
+            leading: const Icon(Icons.memory),
+            title: Text('${model.tier?.name} model'),
+            subtitle: Text(
+              '${model.tier?.sizeLabel} · Qwen2.5, runs offline',
+            ),
+            trailing: PopupMenuButton<String>(
+              onSelected: (value) async {
+                if (value == 'switch') {
+                  final tier = await pickModelTier(
+                    context,
+                    recommended: model.tier,
+                  );
+                  if (tier != null && context.mounted) {
+                    await downloadModelWithProgress(
+                        context, model, tier);
+                  }
+                } else if (value == 'delete') {
+                  if (!context.mounted) return;
+                  final ok = await showDialog<bool>(
+                    context: context,
+                    builder: (context) => AlertDialog(
+                      title: const Text('Remove model?'),
+                      content: const Text(
+                          'Nexus will go back to its built-in command mode.'),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(context, false),
+                          child: const Text('Cancel'),
+                        ),
+                        FilledButton(
+                          onPressed: () => Navigator.pop(context, true),
+                          child: const Text('Remove'),
+                        ),
+                      ],
+                    ),
+                  );
+                  if (ok == true) await model.deleteModel();
+                }
+              },
+              itemBuilder: (context) => const [
+                PopupMenuItem(value: 'switch', child: Text('Switch model')),
+                PopupMenuItem(value: 'delete', child: Text('Delete model')),
+              ],
+            ),
+          );
+        } else {
+          tile = ListTile(
+            leading: const Icon(Icons.memory),
+            title: const Text('Command mode (no model)'),
+            subtitle: const Text(
+                'Nexus understands a fixed set of commands offline.'),
+            trailing: FilledButton.tonal(
+              onPressed: () async {
+                final recommended = await model.recommendTier();
+                if (!context.mounted) return;
+                final tier = await pickModelTier(
+                  context,
+                  recommended: recommended,
+                );
+                if (tier != null && context.mounted) {
+                  await downloadModelWithProgress(context, model, tier);
+                }
+              },
+              child: const Text('Download'),
+            ),
+          );
+        }
+
+        return Column(
+          children: [
+            tile,
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'Voice input: offline speech model downloads automatically '
+                  'the first time you tap the mic.',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
 }

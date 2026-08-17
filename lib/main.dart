@@ -2,7 +2,12 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import 'ai/model_service.dart';
+import 'ai/model_tiers.dart';
+import 'ai/model_ui.dart';
 import 'ai/talk_screen.dart';
+import 'ai/vosk_ffi.dart';
+import 'ai/vosk_service.dart';
 import 'models/paired_device.dart';
 import 'pairing/pairing_service.dart';
 import 'pairing/qr_pairing_screen.dart';
@@ -12,6 +17,7 @@ import 'transfer/send_file_screen.dart';
 import 'transfer/transfer_service.dart';
 
 void main() {
+  voskQuiet(); // silence Vosk's stderr logging on the C side.
   runApp(const NexusApp());
 }
 
@@ -43,10 +49,13 @@ class MainScreen extends StatefulWidget {
 class _MainScreenState extends State<MainScreen> {
   final _pairingService = PairingService();
   final _transferService = TransferService();
+  final _modelService = ModelService();
+  final _voskService = VoskService();
   StreamSubscription<ReceivedFile>? _receivedSub;
   List<PairedDevice> _devices = [];
   List<ReceivedFile> _receivedFiles = [];
   int _tab = 0;
+  bool _offeredModel = false;
 
   @override
   void initState() {
@@ -55,13 +64,92 @@ class _MainScreenState extends State<MainScreen> {
     _receivedSub = _transferService.receivedFiles.listen(_onFileReceived);
     _loadDevices();
     _loadReceivedFiles();
+    _modelService.init().then((_) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _maybeOfferModel());
+    });
   }
 
   @override
   void dispose() {
     _receivedSub?.cancel();
     _transferService.stop();
+    _voskService.dispose();
+    _modelService.dispose();
     super.dispose();
+  }
+
+  /// On first run, explains which model the device can handle and offers to
+  /// download it. The user can also pick a different tier or decline (staying
+  /// in command-mode KeywordBrain forever).
+  Future<void> _maybeOfferModel() async {
+    if (_offeredModel) return;
+    _offeredModel = true;
+    if (_modelService.declined ||
+        _modelService.isReady ||
+        _modelService.isDownloading ||
+        !mounted) {
+      return;
+    }
+
+    final capability = await _modelService.detectCapability();
+    final recommended = pickTierFor(capability);
+    if (!mounted) return;
+
+    final choice = await showDialog<String>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) {
+        final reason = recommended == null
+            ? 'Your device does not have enough free memory for a local model, '
+              'so Nexus will stay in its built-in command mode.'
+            : 'Your device has about ${capability.freeRamLabel} of free memory '
+              'and ${capability.cpuCores} CPU cores — the ${recommended.name} '
+              'model (${recommended.sizeLabel}) fits best.';
+        return AlertDialog(
+          title: const Text('Set up your local assistant'),
+          content: Text(
+            'Nexus can run a private AI entirely on this device. $reason\n\n'
+            'You can change or remove it later in Settings.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, 'decline'),
+              child: const Text('Not now'),
+            ),
+            if (recommended != null) ...[
+              TextButton(
+                onPressed: () => Navigator.pop(context, 'pick'),
+                child: const Text('Pick a different size'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(context, 'download'),
+                child: Text('Download (${recommended.sizeLabel})'),
+              ),
+            ] else
+              FilledButton(
+                onPressed: () => Navigator.pop(context, 'decline'),
+                child: const Text('OK'),
+              ),
+          ],
+        );
+      },
+    );
+
+    if (!mounted) return;
+    if (choice == 'decline') {
+      await _modelService.setDeclined(true);
+      return;
+    }
+    if (choice == 'pick' && recommended != null) {
+      final tier = await pickModelTier(context, recommended: recommended);
+      if (tier != null && mounted) {
+        await downloadModelWithProgress(context, _modelService, tier);
+      }
+      return;
+    }
+    if (choice == 'download' && recommended != null) {
+      await downloadModelWithProgress(context, _modelService, recommended);
+    }
   }
 
   Future<void> _loadDevices() async {
@@ -112,10 +200,14 @@ class _MainScreenState extends State<MainScreen> {
             onDevicesChanged: _loadDevices,
             onDeviceTap: _openSendFile,
           ),
-          const TalkScreen(),
+          TalkScreen(
+            modelService: _modelService,
+            voskService: _voskService,
+          ),
           SettingsScreen(
             devices: _devices,
             receivedFiles: _receivedFiles,
+            modelService: _modelService,
             onForgetDevice: _forgetDevice,
             onClearReceived: _clearReceived,
           ),

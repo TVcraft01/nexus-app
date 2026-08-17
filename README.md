@@ -10,10 +10,13 @@ So far it can:
   end-to-end (AES-GCM) so no one else on the network can read them.
 - **Re-find a paired device** automatically if its local IP address changes
   (e.g. after a router reboot).
-- **Take simple commands** in the **Talk to Nexus** tab — create a folder,
-  open Wi-Fi settings, or set a reminder — answered with on-device
-  text-to-speech.
-- **Manage** paired devices and preferences in a **Settings** tab.
+- **Run a private local AI** that is downloaded once and then runs entirely
+  on the device (no API key, no cloud).
+- **Understand spoken or typed commands** in the **Talk to Nexus** tab —
+  create a folder, open Wi-Fi settings, or set a reminder — using fully
+  on-device speech recognition (Vosk) and text-to-speech.
+- **Manage** paired devices, the AI model, and preferences in a **Settings**
+  tab.
 
 ---
 
@@ -57,24 +60,47 @@ matches the "100% local, internet is an opt-in toggle" rule from the spec.
 
 ### Talk to Nexus (the offline assistant)
 
-The **Talk** tab accepts simple typed commands and answers aloud using the
-device's own text-to-speech engine. Everything runs on-device — nothing is
-sent anywhere. Try:
+The **Talk** tab accepts typed or **spoken** commands and answers aloud using
+the device's own text-to-speech engine. Everything runs on-device — no audio
+and no text ever leaves your device. Try:
 
 - "create a folder" or "create a folder named Photos"
 - "open Wi-Fi settings"
 - "remind me to call Sam at 7 pm" or "remind me in 30 minutes"
+
+Voice input uses **Vosk**, a free, fully-offline speech recognizer. The first
+time you tap the mic, Nexus downloads a small English model (~41 MB) from
+vosk's official site and stores it locally — after that it never talks to the
+network again. On Android you'll be asked for microphone permission; on Linux,
+capturing the microphone needs `pulseaudio-utils` installed (see the notes
+below).
 
 Reminders appear as a normal notification: on Android they are scheduled
 with the OS (so they fire even if the app is closed), while Linux's
 notification system has no scheduler, so there Nexus uses an in-app timer
 and the app must stay open.
 
-**Why no voice input yet:** the standard Android speech-to-text package
-hands your voice to Google's cloud recognizer, which would break the
-"nothing leaves your device" rule. Nexus keeps text input for now; a fully
-on-device speech engine (like Vosk) can be added later without changing the
-rest of the app.
+### The local AI model (adaptive tiers)
+
+On first run Nexus measures your device and offers the largest model it can
+comfortably run — it never forces a one-size-fits-all choice:
+
+| Tier | Model | Download | Needs (free RAM) |
+| --- | --- | --- | --- |
+| Compact | Qwen2.5 1.5B (quantized) | ~941 MB | ~3 GB |
+| Balanced | Qwen2.5 3B (quantized) | ~1.8 GB | ~4 GB |
+| Large | Qwen2.5 7B (quantized) | ~4.4 GB | ~7 GB |
+
+- Models are open-weight (Apache-2.0), downloaded once from Hugging Face
+  (the `bartowski` community conversions), and stored in the app's private
+  storage — they are fetched only once and never re-downloaded.
+- You can **pick a different tier** or **delete the model** at any time in
+  **Settings -> Local assistant**.
+- If the model can't be loaded (or your device is too small for even the
+  Compact tier), Nexus automatically falls back to its built-in keyword
+  command mode, which works on any hardware.
+- Model downloads are the only network access Nexus uses, and it is download
+  only: your conversations are never sent anywhere.
 
 ---
 
@@ -144,10 +170,23 @@ flutter run -d android
 - **Received files** shows files other devices have sent you, including where
   each one was saved.
 
-### 9. The Talk tab
-- Tap **Talk** in the bottom bar and type a command (see the examples above).
+### 9. The Talk tab (commands + voice)
+- Tap **Talk** in the bottom bar and either type a command or tap the mic and
+  speak (see the examples above).
+- The first time you use the mic, Nexus downloads the offline speech model
+  (~41 MB); on Android also allow microphone permission when asked.
 - The first time you set a reminder on Android 13+, allow the notification
   permission when Nexus asks — reminders can't show without it.
+
+### 10. The local AI model (optional, recommended)
+- The first time you open Nexus it explains which model fits your device and
+  offers to download it (the Compact model is ~941 MB). You can decline and
+  stay in command mode, or change tiers later in **Settings -> Local
+  assistant**.
+- The download shows progress and can be cancelled. It needs free disk space
+  of about 1.5x the model size.
+- Linux desktops often have the most free memory, so they may be offered the
+  Balanced or Large tier; phones typically get the Compact tier.
 
 ---
 
@@ -166,6 +205,12 @@ flutter run -d android
 - **No spoken replies on Linux:** make sure a text-to-speech engine is
   installed (for example `sudo apt install speech-dispatcher`). Replies are
   always shown as text regardless.
+- **Mic does nothing / errors on Linux:** voice capture uses `parecord`, which
+  comes with PulseAudio. Install it with `sudo apt install pulseaudio-utils`
+  (most Debian desktops already have it).
+- **Model download fails:** Nexus needs a working internet connection for the
+  one-time download and enough free disk space (about 1.5x the model size).
+  You can retry or pick a smaller tier in **Settings -> Local assistant**.
 - **Camera doesn't open on Android:** the app needs camera permission —
   Android should prompt for this automatically the first time; if not,
   enable it manually in Android's Settings -> Apps -> Nexus -> Permissions.
@@ -177,11 +222,10 @@ flutter run -d android
 
 ## What's NOT built yet (intentionally)
 
-- A real on-device language model and full voice input (the current assistant
-  is a small offline keyword parser — the groundwork is in place to swap in a
-  local LLM later).
 - Distributed task-splitting across devices
 - Sleep-cycle features
+- A larger, even-smarter local model (the current tiers go up to 7B; bigger
+  models or GPU-accelerated inference can be added later)
 - (These come later, once they're designed properly.)
 
 Note: the "Allow internet access" and "Auto-update" toggles in Settings are
