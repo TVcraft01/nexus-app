@@ -18,6 +18,51 @@ import '../tasks/task_crypto.dart';
 import '../tasks/task_protocol.dart';
 import '../tasks/task_worker.dart';
 
+enum TransferDirection { sent, received }
+
+/// One entry in the persisted transfer log: a file sent from or received by
+/// this device. Stored in SharedPreferences as a JSON list (same pattern as
+/// the paired-devices list), most recent first.
+class TransferRecord {
+  final TransferDirection direction;
+  final String fileName;
+  final int sizeBytes;
+  final String otherDeviceName;
+  final DateTime timestamp;
+  final String localPath; // where the file lives on THIS device
+
+  const TransferRecord({
+    required this.direction,
+    required this.fileName,
+    required this.sizeBytes,
+    required this.otherDeviceName,
+    required this.timestamp,
+    required this.localPath,
+  });
+
+  bool get isSent => direction == TransferDirection.sent;
+
+  Map<String, dynamic> toJson() => {
+        'direction': direction.name,
+        'fileName': fileName,
+        'sizeBytes': sizeBytes,
+        'otherDeviceName': otherDeviceName,
+        'timestamp': timestamp.toIso8601String(),
+        'localPath': localPath,
+      };
+
+  factory TransferRecord.fromJson(Map<String, dynamic> json) =>
+      TransferRecord(
+        direction:
+            TransferDirection.values.byName(json['direction'] as String),
+        fileName: json['fileName'] as String,
+        sizeBytes: json['sizeBytes'] as int,
+        otherDeviceName: json['otherDeviceName'] as String,
+        timestamp: DateTime.parse(json['timestamp'] as String),
+        localPath: json['localPath'] as String,
+      );
+}
+
 /// A file that arrived on this device over the local network.
 class ReceivedFile {
   final String fileName;
@@ -60,7 +105,8 @@ class ReceivedFile {
 /// is encrypted with AES-GCM using a key derived from that shared secret.
 class TransferService {
   static const receivePort = 51821;
-  static const _historyKey = 'nexus_received_files';
+  static const _historyKey = 'nexus_transfer_history';
+  static const _legacyHistoryKey = 'nexus_received_files';
   static const _deviceIdKey = 'nexus_device_id';
   static const _deviceNameKey = 'nexus_device_name';
   static const _pairedKey = 'nexus_paired_devices';
@@ -78,6 +124,7 @@ class TransferService {
   final _pairing = PairingService();
   HttpServer? _server;
   final _receivedController = StreamController<ReceivedFile>.broadcast();
+  final _historyController = StreamController<TransferRecord>.broadcast();
 
   /// Wired up by the app at startup; lets this device act as a worker in the
   /// distributed batch-summarization task (capability reporting + execution).
@@ -86,6 +133,10 @@ class TransferService {
 
   /// Emits whenever a file finishes arriving on this device.
   Stream<ReceivedFile> get receivedFiles => _receivedController.stream;
+
+  /// Emits every time a transfer is logged (sent or received), so the Files
+  /// tab can refresh itself without polling.
+  Stream<TransferRecord> get transferHistory => _historyController.stream;
 
   /// Starts the local server that accepts incoming files and answers
   /// reachability "ping"s. Safe to call at app start; it only binds once.
@@ -100,6 +151,7 @@ class TransferService {
     await _server?.close(force: true);
     _server = null;
     await _receivedController.close();
+    await _historyController.close();
   }
 
   /// Executes an incoming batch-task share: decrypts it, summarizes each item
@@ -228,8 +280,17 @@ class TransferService {
       savedPath: dest.path,
       receivedAt: DateTime.now(),
     );
-    await _saveToHistory(received);
+    final record = TransferRecord(
+      direction: TransferDirection.received,
+      fileName: received.fileName,
+      sizeBytes: received.sizeBytes,
+      otherDeviceName: received.fromDeviceName,
+      timestamp: received.receivedAt,
+      localPath: received.savedPath,
+    );
+    await _saveToHistory(record);
     _receivedController.add(received);
+    _historyController.add(record);
 
     final myPublic = RemoteAccessService.instance.publicAddress;
     return Response.ok(
@@ -347,6 +408,7 @@ class TransferService {
             'The other device refused the file (${response.statusCode}).');
       }
       await response.drain<void>();
+      await _logSent(target, file);
     } on SocketException {
       throw Exception('Could not reach ${target.deviceName}.');
     } on TimeoutException {
@@ -584,26 +646,89 @@ class TransferService {
     return dir;
   }
 
-  Future<void> _saveToHistory(ReceivedFile received) async {
+  /// Logs a successful outbound transfer (called from [_sendTo], so every
+  /// send path — LAN, re-discovered IP, or remote — is covered).
+  Future<void> _logSent(PairedDevice target, File file) async {
+    final record = TransferRecord(
+      direction: TransferDirection.sent,
+      fileName: p.basename(file.path),
+      sizeBytes: await file.length(),
+      otherDeviceName: target.deviceName,
+      timestamp: DateTime.now(),
+      localPath: file.path,
+    );
+    await _saveToHistory(record);
+    _historyController.add(record);
+  }
+
+  Future<void> _saveToHistory(TransferRecord record) async {
     final prefs = await SharedPreferences.getInstance();
     final existing = prefs.getStringList(_historyKey) ?? [];
-    existing.insert(0, jsonEncode(received.toJson()));
-    if (existing.length > 50) existing.removeRange(50, existing.length);
+    existing.insert(0, jsonEncode(record.toJson()));
+    if (existing.length > 100) existing.removeRange(100, existing.length);
     await prefs.setStringList(_historyKey, existing);
   }
 
-  Future<List<ReceivedFile>> getReceivedFiles() async {
+  /// Full transfer history (sent + received), most recent first.
+  Future<List<TransferRecord>> getTransferHistory() async {
     final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getStringList(_historyKey) ?? [];
+    var raw = prefs.getStringList(_historyKey) ?? [];
+
+    // One-time migration: before the unified log existed, received files were
+    // stored under a separate key. Convert those entries and retire the key.
+    if (raw.isEmpty) {
+      final legacy = prefs.getStringList(_legacyHistoryKey) ?? [];
+      if (legacy.isNotEmpty) {
+        raw = [
+          for (final r in legacy)
+            jsonEncode(_legacyToRecord(jsonDecode(r) as Map<String, dynamic>)
+                .toJson()),
+        ];
+        await prefs.setStringList(_historyKey, raw);
+        await prefs.remove(_legacyHistoryKey);
+      }
+    }
+
     return raw
-        .map((r) => ReceivedFile.fromJson(jsonDecode(r) as Map<String, dynamic>))
+        .map((r) =>
+            TransferRecord.fromJson(jsonDecode(r) as Map<String, dynamic>))
         .toList();
   }
 
-  Future<void> clearReceivedFiles() async {
+  TransferRecord _legacyToRecord(Map<String, dynamic> legacy) =>
+      TransferRecord(
+        direction: TransferDirection.received,
+        fileName: legacy['fileName'] as String,
+        sizeBytes: legacy['sizeBytes'] as int,
+        otherDeviceName: legacy['fromDeviceName'] as String,
+        timestamp: DateTime.parse(legacy['receivedAt'] as String),
+        localPath: legacy['savedPath'] as String,
+      );
+
+  /// Received-only view of the history, for the Settings section.
+  Future<List<ReceivedFile>> getReceivedFiles() async {
+    final records = await getTransferHistory();
+    return [
+      for (final r in records.where((r) => r.direction == TransferDirection.received))
+        ReceivedFile(
+          fileName: r.fileName,
+          sizeBytes: r.sizeBytes,
+          fromDeviceName: r.otherDeviceName,
+          savedPath: r.localPath,
+          receivedAt: r.timestamp,
+        ),
+    ];
+  }
+
+  /// Clears the whole transfer log (sent and received).
+  Future<void> clearTransferHistory() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_historyKey);
+    await prefs.remove(_legacyHistoryKey);
   }
+
+  /// Kept for the Settings screen, which still labels this "Clear history".
+  Future<void> clearReceivedFiles() => clearTransferHistory();
 
   /// Strips anything that could be used for path traversal, so a peer can't
   /// write outside the Nexus receive folder.

@@ -58,6 +58,10 @@ So far it can:
    the old address still answers; if not, it scans your local network for
    that device and updates its address automatically before sending.
 6. Progress is shown live on the sending device.
+7. Every transfer (sent or received) is logged to the **Files** tab — the
+   file name, direction, other device, size, and timestamp — stored on-device
+   in SharedPreferences (most recent first). Tapping an entry opens the file
+   with your platform's default app (or reveals its folder).
 
 No cloud, no account, no third-party server is involved at any point — this
 matches the "100% local, internet is an opt-in toggle" rule from the spec.
@@ -206,6 +210,9 @@ flutter run -d android
 ### 9. The Talk tab (commands + voice)
 - Tap **Talk** in the bottom bar and either type a command or tap the mic and
   speak (see the examples above).
+- The **?** icon in the top-right opens "What can I say?" — the list of
+  commands Nexus currently understands, with the exact phrasings the offline
+  keyword parser matches on.
 - The first time you use the mic, Nexus downloads the offline speech model
   (~41 MB); on Android also allow microphone permission when asked.
 - The first time you set a reminder on Android 13+, allow the notification

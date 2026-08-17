@@ -16,6 +16,7 @@ import 'pairing/qr_scan_screen.dart';
 import 'settings/settings_screen.dart';
 import 'tasks/batch_task_screen.dart';
 import 'tasks/task_worker.dart';
+import 'transfer/files_screen.dart';
 import 'transfer/send_file_screen.dart';
 import 'transfer/transfer_service.dart';
 
@@ -55,8 +56,10 @@ class _MainScreenState extends State<MainScreen> {
   final _modelService = ModelService();
   final _voskService = VoskService();
   StreamSubscription<ReceivedFile>? _receivedSub;
+  StreamSubscription<TransferRecord>? _historySub;
   List<PairedDevice> _devices = [];
   List<ReceivedFile> _receivedFiles = [];
+  List<TransferRecord> _transferHistory = [];
   int _tab = 0;
   bool _offeredModel = false;
 
@@ -67,8 +70,11 @@ class _MainScreenState extends State<MainScreen> {
     // Let this device act as a worker for distributed batch tasks.
     _transferService.taskWorker = TaskWorker(modelService: _modelService);
     _receivedSub = _transferService.receivedFiles.listen(_onFileReceived);
+    _historySub =
+        _transferService.transferHistory.listen((_) => _loadTransferHistory());
     _loadDevices();
     _loadReceivedFiles();
+    _loadTransferHistory();
     _modelService.init().then((_) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _maybeOfferModel());
     });
@@ -86,6 +92,7 @@ class _MainScreenState extends State<MainScreen> {
   @override
   void dispose() {
     _receivedSub?.cancel();
+    _historySub?.cancel();
     _transferService.stop();
     _voskService.dispose();
     _modelService.dispose();
@@ -187,14 +194,24 @@ class _MainScreenState extends State<MainScreen> {
     if (mounted) setState(() => _receivedFiles = files);
   }
 
+  Future<void> _loadTransferHistory() async {
+    final history = await _transferService.getTransferHistory();
+    if (mounted) setState(() => _transferHistory = history);
+  }
+
   Future<void> _forgetDevice(String deviceId) async {
     await _pairingService.forgetDevice(deviceId);
     await _loadDevices();
   }
 
   Future<void> _clearReceived() async {
-    await _transferService.clearReceivedFiles();
-    if (mounted) setState(() => _receivedFiles = []);
+    await _transferService.clearTransferHistory();
+    if (mounted) {
+      setState(() {
+        _receivedFiles = [];
+        _transferHistory = [];
+      });
+    }
   }
 
   void _onFileReceived(ReceivedFile file) {
@@ -209,9 +226,11 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   void _openSendFile(PairedDevice device) {
-    Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => SendFileScreen(target: device)),
-    );
+    // Reload the transfer log when the send screen closes, so a just-sent
+    // file appears in the Files tab without needing an app restart.
+    Navigator.of(context)
+        .push(MaterialPageRoute(builder: (_) => SendFileScreen(target: device)))
+        .then((_) => _loadTransferHistory());
   }
 
   void _openBatchTask() {
@@ -237,6 +256,10 @@ class _MainScreenState extends State<MainScreen> {
             onDeviceTap: _openSendFile,
             onBatchTask: _openBatchTask,
           ),
+          FilesScreen(
+            records: _transferHistory,
+            onClear: _clearReceived,
+          ),
           TalkScreen(
             modelService: _modelService,
             voskService: _voskService,
@@ -257,6 +280,10 @@ class _MainScreenState extends State<MainScreen> {
           NavigationDestination(
             icon: Icon(Icons.devices),
             label: 'Devices',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.folder_outlined),
+            label: 'Files',
           ),
           NavigationDestination(
             icon: Icon(Icons.mic_none),
