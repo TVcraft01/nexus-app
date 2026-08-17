@@ -41,6 +41,7 @@ class _TalkScreenState extends State<TalkScreen> {
         _llmBrain = LlmBrain(
           modelPath: model.modelPath!,
           contextSize: model.tier?.contextSize ?? 2048,
+          minFreeRamBytes: model.tier?.minFreeRamBytes ?? 0,
         );
         _llmBrainModelPath = model.modelPath;
       }
@@ -108,6 +109,79 @@ class _TalkScreenState extends State<TalkScreen> {
     );
   }
 
+  /// A one-line status row that makes it unambiguous whether replies are
+  /// coming from the local LLM or from the built-in keyword parser. When the
+  /// model is installed but can't be loaded (e.g. not enough free memory), it
+  /// says so explicitly rather than silently falling back.
+  Widget _buildModeIndicator(ThemeData theme) {
+    final model = widget.modelService;
+
+    // No model installed -> the guaranteed command-mode floor.
+    if (!model.isReady) {
+      return _ModeBadge(
+        icon: Icons.handyman_outlined,
+        label: 'Command mode',
+        detail: 'Built-in command parser (no local model)',
+        color: theme.colorScheme.tertiary,
+      );
+    }
+
+    _brain; // ensure the LlmBrain exists so its load state can be watched
+    final llm = _llmBrain;
+    if (llm == null) {
+      return _ModeBadge(
+        icon: Icons.handyman_outlined,
+        label: 'Command mode',
+        detail: 'Built-in command parser (no local model)',
+        color: theme.colorScheme.tertiary,
+      );
+    }
+
+    return ListenableBuilder(
+      listenable: llm.status,
+      builder: (context, _) {
+        switch (llm.status.value) {
+          case LlmStatus.ready:
+            return _ModeBadge(
+              icon: Icons.memory,
+              label: 'LLM — ${model.tier?.name ?? 'local'} model',
+              detail: 'Replies come from the on-device model',
+              color: Colors.green.shade700,
+            );
+          case LlmStatus.insufficientMemory:
+            return _ModeBadge(
+              icon: Icons.speed,
+              label: 'Command mode — low memory',
+              detail: 'Not enough free RAM for the model; using the built-in '
+                  'parser',
+              color: Colors.orange.shade800,
+            );
+          case LlmStatus.loadFailed:
+            return _ModeBadge(
+              icon: Icons.error_outline,
+              label: 'Command mode — model error',
+              detail: 'The model failed to load; using the built-in parser',
+              color: Colors.orange.shade800,
+            );
+          case LlmStatus.loading:
+            return _ModeBadge(
+              icon: Icons.hourglass_top,
+              label: 'Loading model…',
+              detail: 'The first command is loading the local model',
+              color: theme.colorScheme.primary,
+            );
+          case LlmStatus.notLoaded:
+            return _ModeBadge(
+              icon: Icons.memory,
+              label: 'Local model ready',
+              detail: 'Loads on your first command',
+              color: theme.colorScheme.primary,
+            );
+        }
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -131,6 +205,7 @@ class _TalkScreenState extends State<TalkScreen> {
               ),
             ),
           ),
+          _buildModeIndicator(theme),
           Expanded(
             child: _messages.isEmpty
                 ? Center(
@@ -225,6 +300,61 @@ class _TalkScreenState extends State<TalkScreen> {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// A compact, single-row status badge for the Talk screen's brain mode.
+class _ModeBadge extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String detail;
+  final Color color;
+
+  const _ModeBadge({
+    required this.icon,
+    required this.label,
+    required this.detail,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Row(
+          children: [
+            Icon(icon, size: 18, color: color),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    label,
+                    style: theme.textTheme.labelLarge?.copyWith(
+                      color: color,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  Text(
+                    detail,
+                    style: theme.textTheme.bodySmall?.copyWith(color: color),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
