@@ -256,6 +256,29 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ],
             ),
           );
+        } else if (model.declined) {
+          tile = ListTile(
+            leading: const Icon(Icons.block),
+            title: const Text('Local model disabled'),
+            subtitle: const Text(
+                'You chose to stay in command mode on this device.'),
+            trailing: FilledButton.tonal(
+              onPressed: () async {
+                await model.setDeclined(false);
+                if (!context.mounted) return;
+                final recommended = await model.recommendTier();
+                if (!context.mounted) return;
+                final tier = await pickModelTier(
+                  context,
+                  recommended: recommended,
+                );
+                if (tier != null && context.mounted) {
+                  await downloadModelWithProgress(context, model, tier);
+                }
+              },
+              child: const Text('Enable'),
+            ),
+          );
         } else {
           tile = ListTile(
             leading: const Icon(Icons.memory),

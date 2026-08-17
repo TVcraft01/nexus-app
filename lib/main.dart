@@ -100,8 +100,9 @@ class _MainScreenState extends State<MainScreen> {
       barrierDismissible: false,
       builder: (context) {
         final reason = recommended == null
-            ? 'Your device does not have enough free memory for a local model, '
-              'so Nexus will stay in its built-in command mode.'
+            ? 'Your device does not have enough free memory for a local model '
+              'right now, so Nexus will run in its built-in command mode. You '
+              'can ask it to check again later from Settings.'
             : 'Your device has about ${capability.freeRamLabel} of free memory '
               'and ${capability.cpuCores} CPU cores — the ${recommended.name} '
               'model (${recommended.sizeLabel}) fits best.';
@@ -113,7 +114,7 @@ class _MainScreenState extends State<MainScreen> {
           ),
           actions: [
             TextButton(
-              onPressed: () => Navigator.pop(context, 'decline'),
+              onPressed: () => Navigator.pop(context, 'notNow'),
               child: const Text('Not now'),
             ),
             if (recommended != null) ...[
@@ -128,7 +129,7 @@ class _MainScreenState extends State<MainScreen> {
             ] else
               FilledButton(
                 onPressed: () => Navigator.pop(context, 'decline'),
-                child: const Text('OK'),
+                child: const Text('Stay in command mode'),
               ),
           ],
         );
@@ -137,9 +138,12 @@ class _MainScreenState extends State<MainScreen> {
 
     if (!mounted) return;
     if (choice == 'decline') {
+      // Persistent: the user opted out of a local model on this device.
       await _modelService.setDeclined(true);
       return;
     }
+    // 'notNow' (and null) intentionally leave _modelService.declined false so
+    // the dialog offers again on the next launch.
     if (choice == 'pick' && recommended != null) {
       final tier = await pickModelTier(context, recommended: recommended);
       if (tier != null && mounted) {
