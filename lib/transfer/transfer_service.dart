@@ -13,6 +13,7 @@ import 'package:shelf/shelf_io.dart' as shelf_io;
 
 import '../models/paired_device.dart';
 import '../pairing/pairing_service.dart';
+import '../remote/remote_access_service.dart';
 
 /// A file that arrived on this device over the local network.
 class ReceivedFile {
@@ -95,13 +96,20 @@ class TransferService {
 
   Future<Response> _handleRequest(Request request) async {
     // Lightweight liveness probe used for the stale-IP recovery in sendFile.
+    // Also shares our current public endpoint so the caller can store it for
+    // the opt-in remote-connect path.
     if (request.method == 'GET' && request.url.path == 'ping') {
+      final public = RemoteAccessService.instance.publicAddress;
       return Response.ok(
         jsonEncode({
           'deviceId': await _thisDeviceId(),
           'deviceName': await _thisDeviceName(),
+          if (public != null) 'publicAddress': public,
         }),
-        headers: {'content-type': 'application/json'},
+        headers: {
+          'content-type': 'application/json',
+          if (public != null) 'x-nexus-public': public,
+        },
       );
     }
 
@@ -114,6 +122,14 @@ class TransferService {
     if (device == null) {
       return Response.forbidden('device not paired');
     }
+
+    // The sender piggybacks its current public endpoint; remember it so we can
+    // reach back later when not on the same LAN.
+    final senderPublic = request.headers['x-nexus-public'];
+    if (senderPublic != null && senderPublic.isNotEmpty) {
+      await _pairing.updateDevicePublicAddress(device.deviceId, senderPublic);
+    }
+
     final keyBytes = base64Decode(device.transferKey);
 
     final rawName = request.headers['x-nexus-filename'] ?? 'received_file';
@@ -144,18 +160,23 @@ class TransferService {
     await _saveToHistory(received);
     _receivedController.add(received);
 
+    final myPublic = RemoteAccessService.instance.publicAddress;
     return Response.ok(
       jsonEncode({'status': 'ok', 'savedPath': dest.path}),
-      headers: {'content-type': 'application/json'},
+      headers: {
+        'content-type': 'application/json',
+        if (myPublic != null) 'x-nexus-public': myPublic,
+      },
     );
   }
 
   /// Pushes [filePath] directly to [target], encrypted with AES-GCM.
   /// [onProgress] reports 0.0..1.0 as plaintext bytes are processed.
   ///
-  /// If the stored IP no longer answers, Nexus quickly scans the local subnet
-  /// for a Nexus instance with the same device ID and retries with the fresh
-  /// IP before giving up.
+  /// Connection order is always: local IP first, then a quick subnet
+  /// re-discovery (DHCP change), then — only if the user opted into "Allow
+  /// internet access" — the peer's last-known public endpoint. Each attempt
+  /// also piggybacks our public endpoint so the peer can reach us back later.
   Future<void> sendFile({
     required PairedDevice target,
     required String filePath,
@@ -166,34 +187,88 @@ class TransferService {
       throw Exception('That file no longer exists.');
     }
 
-    var effective = target;
-    if (!await _isReachable(target)) {
-      final newIp = await _discoverIp(target);
-      if (newIp == null) {
-        throw Exception(
-            'Couldn\'t reach ${target.deviceName} — try re-pairing.');
-      }
-      await _pairing.updateDeviceIp(target.deviceId, newIp);
-      effective = target.copyWith(ipAddress: newIp);
+    final remote = RemoteAccessService.instance;
+    final senderName = await _thisDeviceName();
+    final keyBytes = base64Decode(target.transferKey);
+
+    // 1. Local network first (same behavior as before).
+    if (await _isReachable(target)) {
+      await _sendTo(target, target.ipAddress, receivePort, file, keyBytes,
+          senderName, onProgress);
+      remote.reportStatus(target.deviceId, DeviceLinkStatus.local);
+      return;
     }
 
-    final senderName = await _thisDeviceName();
-    final keyBytes = base64Decode(effective.transferKey);
+    // 2. Re-discover on the last-known subnet (DHCP lease change).
+    final newIp = await _discoverIp(target);
+    if (newIp != null) {
+      await _pairing.updateDeviceIp(target.deviceId, newIp);
+      await _sendTo(target, newIp, receivePort, file, keyBytes, senderName,
+          onProgress);
+      remote.reportStatus(target.deviceId, DeviceLinkStatus.local);
+      return;
+    }
 
+    // 3. Remote path — only when the user opted in and we know the peer's
+    //    public endpoint. Direct device-to-device over the peer's forwarded
+    //    port; no relay.
+    if (remote.enabled && target.publicAddress != null) {
+      final parts = target.publicAddress!.split(':');
+      final host = parts.first;
+      final port = parts.length > 1 ? (int.tryParse(parts[1]) ?? receivePort) : receivePort;
+      try {
+        await _sendTo(target, host, port, file, keyBytes, senderName, onProgress);
+        remote.reportStatus(target.deviceId, DeviceLinkStatus.remote);
+        return;
+      } catch (_) {
+        // Both paths failed; fall through to the honest, actionable message.
+      }
+    }
+
+    remote.reportStatus(target.deviceId, DeviceLinkStatus.unreachable);
+    if (remote.enabled) {
+      throw Exception(
+          "Can't reach ${target.deviceName} remotely right now — you'll need "
+          'to be on the same network.');
+    }
+    throw Exception('Couldn\'t reach ${target.deviceName} — make sure both '
+        'devices are on the same Wi-Fi network with Nexus open.');
+  }
+
+  /// Performs the actual encrypted POST to `host:port` and, on success,
+  /// remembers the peer's public endpoint from its response header.
+  Future<void> _sendTo(
+    PairedDevice target,
+    String host,
+    int port,
+    File file,
+    List<int> keyBytes,
+    String senderName,
+    void Function(double progress)? onProgress,
+  ) async {
+    final myPublic = RemoteAccessService.instance.publicAddress;
     final client = HttpClient()..connectionTimeout = const Duration(seconds: 8);
     try {
       final request = await client.postUrl(
-        Uri.parse('http://${effective.ipAddress}:$receivePort/receive'),
+        Uri.parse('http://$host:$port/receive'),
       );
       request.headers.set('content-type', 'application/octet-stream');
       request.headers.set(
-          'x-nexus-filename', Uri.encodeComponent(p.basename(filePath)));
+          'x-nexus-filename', Uri.encodeComponent(p.basename(file.path)));
       request.headers.set('x-nexus-sender', senderName);
-      request.headers.set('x-nexus-key', effective.pairingKey);
+      request.headers.set('x-nexus-key', target.pairingKey);
+      if (myPublic != null) {
+        request.headers.set('x-nexus-public', myPublic);
+      }
 
       await request
           .addStream(_encryptedBody(file, keyBytes, onProgress: onProgress));
       final response = await request.close();
+
+      final peerPublic = response.headers.value('x-nexus-public');
+      if (peerPublic != null && peerPublic.isNotEmpty) {
+        await _pairing.updateDevicePublicAddress(target.deviceId, peerPublic);
+      }
 
       if (response.statusCode != 200) {
         await response.drain<void>();
@@ -202,8 +277,9 @@ class TransferService {
       }
       await response.drain<void>();
     } on SocketException {
-      throw Exception('Could not reach ${target.deviceName}. Make sure it is '
-          'on the same Wi-Fi network with Nexus open.');
+      throw Exception('Could not reach ${target.deviceName}.');
+    } on TimeoutException {
+      throw Exception('Could not reach ${target.deviceName} in time.');
     } finally {
       client.close(force: true);
     }
@@ -314,7 +390,14 @@ class TransferService {
           .join()
           .timeout(const Duration(seconds: 2));
       final json = jsonDecode(body) as Map<String, dynamic>;
-      return json['deviceId'] == target.deviceId;
+      if (json['deviceId'] != target.deviceId) return false;
+
+      // Learn the peer's public endpoint for the opt-in remote path.
+      final peerPublic = json['publicAddress'] as String?;
+      if (peerPublic != null && peerPublic.isNotEmpty) {
+        await _pairing.updateDevicePublicAddress(target.deviceId, peerPublic);
+      }
+      return true;
     } catch (_) {
       return false;
     } finally {

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../ai/model_service.dart';
 import '../ai/model_ui.dart';
 import '../models/paired_device.dart';
+import '../remote/remote_access_service.dart';
 import '../transfer/transfer_service.dart';
 import 'settings_service.dart';
 
@@ -94,15 +95,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
           SwitchListTile(
             title: const Text('Allow internet access'),
             subtitle: const Text(
-                'Off. When on, Nexus may later connect two devices directly '
-                'over the internet \u2014 never through anyone else\u2019s server.'),
+                'Off = LAN only. On = reach your paired devices on other '
+                'networks, direct device-to-device. Uses a public STUN '
+                'server only to discover your public address \u2014 never to '
+                'relay files, commands, or messages.'),
             secondary: const Icon(Icons.public_off),
             value: _allowInternet ?? false,
             onChanged: _allowInternet == null
                 ? null
                 : (v) async {
-                    await _settings.setAllowInternetAccess(v);
-                    setState(() => _allowInternet = v);
+                    await RemoteAccessService.instance.setEnabled(v);
+                    if (mounted) setState(() => _allowInternet = v);
                   },
           ),
           SwitchListTile(
@@ -120,6 +123,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const Divider(),
           _sectionHeader('Local assistant'),
           _buildModelSection(context),
+          const Divider(),
+          _sectionHeader('Remote access'),
+          _buildRemoteSection(context),
           const Divider(),
           _sectionHeader('Paired devices'),
           if (widget.devices.isEmpty)
@@ -185,6 +191,93 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
       ),
     );
+  }
+
+  /// Per-device connectivity status (Local / Remote / Unreachable), updated
+  /// live on each connection attempt so it's never stale.
+  Widget _buildRemoteSection(BuildContext context) {
+    return ListenableBuilder(
+      listenable: RemoteAccessService.instance,
+      builder: (context, _) {
+        final remote = RemoteAccessService.instance;
+        if (!remote.enabled) {
+          return const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Text(
+              'Turn on "Allow internet access" above to reach paired devices '
+              'when you\'re not on the same network.',
+            ),
+          );
+        }
+
+        final header = remote.publicAddress == null
+            ? 'No public port mapped yet. Your router may not support '
+                'UPnP/NAT-PMP, so remote connections may not work.'
+            : 'This device is reachable at ${remote.publicAddress}';
+        final items = <Widget>[
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Text(header, style: Theme.of(context).textTheme.bodySmall),
+          ),
+        ];
+
+        if (widget.devices.isEmpty) {
+          items.add(const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Text('No paired devices yet.'),
+          ));
+        } else {
+          items.addAll(widget.devices.map((d) {
+            final status = remote.statusOf(d.deviceId);
+            return ListTile(
+              leading: Icon(_statusIcon(status), color: _statusColor(status)),
+              title: Text(d.deviceName),
+              subtitle: Text(_statusLabel(status)),
+            );
+          }));
+        }
+        return Column(children: items);
+      },
+    );
+  }
+
+  IconData _statusIcon(DeviceLinkStatus s) {
+    switch (s) {
+      case DeviceLinkStatus.local:
+        return Icons.wifi;
+      case DeviceLinkStatus.remote:
+        return Icons.cloud;
+      case DeviceLinkStatus.unreachable:
+        return Icons.cloud_off;
+      case DeviceLinkStatus.unknown:
+        return Icons.help_outline;
+    }
+  }
+
+  Color? _statusColor(DeviceLinkStatus s) {
+    switch (s) {
+      case DeviceLinkStatus.local:
+        return Colors.green;
+      case DeviceLinkStatus.remote:
+        return Colors.blue;
+      case DeviceLinkStatus.unreachable:
+        return Colors.red;
+      case DeviceLinkStatus.unknown:
+        return null;
+    }
+  }
+
+  String _statusLabel(DeviceLinkStatus s) {
+    switch (s) {
+      case DeviceLinkStatus.local:
+        return 'Local network';
+      case DeviceLinkStatus.remote:
+        return 'Remote (direct)';
+      case DeviceLinkStatus.unreachable:
+        return 'Unreachable';
+      case DeviceLinkStatus.unknown:
+        return 'Not connected yet';
+    }
   }
 
   /// Shows the local LLM's tier/download state and lets the user switch or

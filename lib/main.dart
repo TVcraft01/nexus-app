@@ -10,6 +10,7 @@ import 'ai/vosk_ffi.dart';
 import 'ai/vosk_service.dart';
 import 'models/paired_device.dart';
 import 'pairing/pairing_service.dart';
+import 'remote/remote_access_service.dart';
 import 'pairing/qr_pairing_screen.dart';
 import 'pairing/qr_scan_screen.dart';
 import 'settings/settings_screen.dart';
@@ -67,6 +68,15 @@ class _MainScreenState extends State<MainScreen> {
     _modelService.init().then((_) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _maybeOfferModel());
     });
+    _initRemoteAccess();
+  }
+
+  /// Brings the opt-in remote-access service up to date: reads the toggle and,
+  /// if enabled, opens a public port mapping + shares our public endpoint.
+  Future<void> _initRemoteAccess() async {
+    final remote = RemoteAccessService.instance;
+    await remote.init();
+    await remote.refreshPublicAddress(receivePort: TransferService.receivePort);
   }
 
   @override

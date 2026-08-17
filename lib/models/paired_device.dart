@@ -11,6 +11,10 @@ class PairedDevice {
   final int port; // port Nexus is listening on for handshakes
   final String pairingKey; // shared secret created at pairing time
 
+  /// Last-known public endpoint ("ip:port") shared over a prior connection.
+  /// Used only for the opt-in remote-connect path, after the local IP fails.
+  final String? publicAddress;
+
   /// base64 AES-256 key derived from [pairingKey] via HKDF. Used only to
   /// encrypt/decrypt file transfers; the raw pairing key is never used as a
   /// key directly.
@@ -23,6 +27,7 @@ class PairedDevice {
     required this.port,
     required this.pairingKey,
     String? transferKey,
+    this.publicAddress,
   }) : transferKey = transferKey ?? deriveTransferKeyBase64(pairingKey);
 
   /// Turns this device's info into JSON — this JSON string is what actually
@@ -34,6 +39,7 @@ class PairedDevice {
         'port': port,
         'pairingKey': pairingKey,
         'transferKey': transferKey,
+        if (publicAddress != null) 'publicAddress': publicAddress,
       };
 
   /// Rebuilds a PairedDevice from the JSON that came out of a scanned QR code
@@ -46,6 +52,7 @@ class PairedDevice {
         port: json['port'] as int,
         pairingKey: json['pairingKey'] as String,
         transferKey: json['transferKey'] as String?,
+        publicAddress: json['publicAddress'] as String?,
       );
 
   PairedDevice copyWith({
@@ -54,6 +61,8 @@ class PairedDevice {
     String? ipAddress,
     int? port,
     String? pairingKey,
+    String? publicAddress,
+    bool clearPublicAddress = false,
   }) =>
       PairedDevice(
         deviceId: deviceId ?? this.deviceId,
@@ -61,6 +70,7 @@ class PairedDevice {
         ipAddress: ipAddress ?? this.ipAddress,
         port: port ?? this.port,
         pairingKey: pairingKey ?? this.pairingKey,
+        publicAddress: clearPublicAddress ? null : (publicAddress ?? this.publicAddress),
         // Re-derive whenever the pairing key changes, otherwise keep it.
         transferKey: pairingKey == null ? transferKey : null,
       );

@@ -2,12 +2,16 @@
 
 Nexus is one app (Android + Debian Linux, built from a single codebase) that
 lets your own devices work together directly — no cloud, no account, no
-third-party server. Everything happens on your own local network.
+third-party server. Everything happens on your own local network by default;
+you can optionally turn on **remote access** to reach your own devices over
+the internet, still direct device-to-device.
 
 So far it can:
 - **Pair two devices** by scanning a QR code.
 - **Send files** between paired devices with live progress, **encrypted**
   end-to-end (AES-GCM) so no one else on the network can read them.
+- **Reach a paired device on another network** (optional, direct P2P — no
+  relay), when the "Allow internet access" toggle is on.
 - **Re-find a paired device** automatically if its local IP address changes
   (e.g. after a router reboot).
 - **Run a private local AI** that is downloaded once and then runs entirely
@@ -57,6 +61,32 @@ So far it can:
 
 No cloud, no account, no third-party server is involved at any point — this
 matches the "100% local, internet is an opt-in toggle" rule from the spec.
+
+### Remote access (reach a device on another network)
+
+The "Allow internet access" toggle in Settings is **off by default**, and when
+off Nexus is fully LAN-only (exactly as before). Turning it on enables direct
+remote connections between paired devices, with **no relay server and no
+third-party server ever handling your files, commands, or messages**:
+
+1. Each device discovers its **public IP address** using Google's public STUN
+   server (`stun.l.google.com:19302`). STUN sees only bare connection
+   metadata — the public IP and a port number — **never** file contents,
+   commands, or any other user data.
+2. Each device then asks its router to forward its local receive port using
+   **UPnP IGD** or **NAT-PMP**, giving it a reachable public `ip:port`.
+3. That public endpoint is shared with a paired device the next time the two
+   connect (piggybacked on an existing transfer), so they can reach each
+   other later.
+4. When you send a file, Nexus always tries the **local network first**, then
+   the stored public endpoint — the LAN path is never skipped.
+
+Known limitation: this works on common home routers that expose UPnP/NAT-PMP
+(or a cone NAT), but **symmetric NAT and routers with UPnP disabled** can't be
+reached this way. When that happens Nexus says "Can't reach … remotely right
+now — you'll need to be on the same network" rather than hanging. There is **no
+relay fallback yet** (a relay would have to be your own self-hosted server — a
+separate future decision).
 
 ### Talk to Nexus (the offline assistant)
 
@@ -162,9 +192,12 @@ flutter run -d android
 
 ### 8. The Settings tab
 - Tap **Settings** at the bottom of the app.
-- **Allow internet access** and **Auto-update** are both **off by default**,
-  and stored on your device only. They don't change anything yet — they're
-  ready for features coming in a later phase.
+- **Allow internet access** is **off by default** (LAN only). Turn it on to
+  enable remote access (see "Remote access" above). **Auto-update** is still
+  a reserved placeholder.
+- The **Remote access** section shows, per paired device, whether it was last
+  reached over the **Local network**, **Remote (direct)**, or is currently
+  **Unreachable** — plus this device's own public endpoint when one is open.
 - **Paired devices** lists every device you've paired with; tap the trash icon
   next to one to **forget** it.
 - **Received files** shows files other devices have sent you, including where
@@ -200,6 +233,11 @@ flutter run -d android
   is open on the receiving device. If a device's IP changed, Nexus re-finds
   it automatically; if that fails you'll see "Couldn't reach … — try
   re-pairing", in which case pair the two devices again.
+- **Can't reach a device remotely:** both devices need "Allow internet access"
+  on and to have connected once before (so they learned each other's public
+  address). Some routers (symmetric NAT, or UPnP disabled) don't support
+  direct remote connections — there's no relay fallback yet, so those devices
+  stay LAN-only.
 - **Reminder didn't fire on Linux:** Linux can't schedule notifications while
   the app is closed — keep Nexus open, or set the reminder on Android.
 - **No spoken replies on Linux:** make sure a text-to-speech engine is
@@ -228,6 +266,6 @@ flutter run -d android
   models or GPU-accelerated inference can be added later)
 - (These come later, once they're designed properly.)
 
-Note: the "Allow internet access" and "Auto-update" toggles in Settings are
-stored on-device but don't change behaviour yet — they're placeholders for
-features planned in a later phase.
+Note: the "Auto-update" toggle in Settings is stored on-device but doesn't
+change behaviour yet — it's a placeholder for a feature planned in a later
+phase.
