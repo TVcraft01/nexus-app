@@ -14,6 +14,9 @@ import 'package:shelf/shelf_io.dart' as shelf_io;
 import '../models/paired_device.dart';
 import '../pairing/pairing_service.dart';
 import '../remote/remote_access_service.dart';
+import '../tasks/task_crypto.dart';
+import '../tasks/task_protocol.dart';
+import '../tasks/task_worker.dart';
 
 /// A file that arrived on this device over the local network.
 class ReceivedFile {
@@ -76,6 +79,11 @@ class TransferService {
   HttpServer? _server;
   final _receivedController = StreamController<ReceivedFile>.broadcast();
 
+  /// Wired up by the app at startup; lets this device act as a worker in the
+  /// distributed batch-summarization task (capability reporting + execution).
+  /// Null means this device reports "no model" and refuses tasks.
+  TaskWorker? taskWorker;
+
   /// Emits whenever a file finishes arriving on this device.
   Stream<ReceivedFile> get receivedFiles => _receivedController.stream;
 
@@ -92,6 +100,47 @@ class TransferService {
     await _server?.close(force: true);
     _server = null;
     await _receivedController.close();
+  }
+
+  /// Executes an incoming batch-task share: decrypts it, summarizes each item
+  /// with the local model, and returns the encrypted results.
+  Future<Response> _handleTask(Request request) async {
+    final key = request.headers['x-nexus-key'] ?? '';
+    final device = await _deviceForPairingKey(key);
+    if (device == null) {
+      return Response.forbidden('device not paired');
+    }
+
+    final worker = taskWorker;
+    if (worker == null || !worker.isAvailable) {
+      return Response(409,
+          body: '{"error":"no local model on this device"}',
+          headers: {'content-type': 'application/json'});
+    }
+
+    try {
+      final keyBytes = base64Decode(device.transferKey);
+      final encrypted = await request.read().expand((chunk) => chunk).toList();
+      final plain = await decryptTaskPayload(encrypted, keyBytes);
+      final json = jsonDecode(utf8.decode(plain)) as Map<String, dynamic>;
+      final items = [
+        for (final i in json['items'] as List)
+          TaskItem.fromJson(i as Map<String, dynamic>),
+      ];
+      final results = await worker.summarizeItems(items);
+      final responsePayload = utf8.encode(jsonEncode({
+        'results': [for (final r in results) r.toJson()],
+      }));
+      return Response.ok(
+        await encryptTaskPayload(responsePayload, keyBytes),
+        headers: {'content-type': 'application/octet-stream'},
+      );
+    } catch (e) {
+      return Response.badRequest(
+        body: jsonEncode({'error': 'task failed: $e'}),
+        headers: {'content-type': 'application/json'},
+      );
+    }
   }
 
   Future<Response> _handleRequest(Request request) async {
@@ -111,6 +160,28 @@ class TransferService {
           if (public != null) 'x-nexus-public': public,
         },
       );
+    }
+
+    // Capability check for the batch task: does this device have a model
+    // loaded, and which tier? Lightweight, like /ping.
+    if (request.method == 'GET' && request.url.path == 'status') {
+      final worker = taskWorker;
+      return Response.ok(
+        jsonEncode({
+          'deviceId': await _thisDeviceId(),
+          'deviceName': await _thisDeviceName(),
+          'llmAvailable': worker?.isAvailable ?? false,
+          'llmTier': worker?.tierId,
+        }),
+        headers: {'content-type': 'application/json'},
+      );
+    }
+
+    // Distributed-task endpoint: summarize an assigned share with the local
+    // model and return the summaries. AES-GCM encrypted like file transfer,
+    // authenticated by the pairing key.
+    if (request.method == 'POST' && request.url.path == 'task') {
+      return _handleTask(request);
     }
 
     if (request.method != 'POST' || request.url.path != 'receive') {

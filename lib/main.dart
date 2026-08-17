@@ -14,6 +14,8 @@ import 'remote/remote_access_service.dart';
 import 'pairing/qr_pairing_screen.dart';
 import 'pairing/qr_scan_screen.dart';
 import 'settings/settings_screen.dart';
+import 'tasks/batch_task_screen.dart';
+import 'tasks/task_worker.dart';
 import 'transfer/send_file_screen.dart';
 import 'transfer/transfer_service.dart';
 
@@ -62,6 +64,8 @@ class _MainScreenState extends State<MainScreen> {
   void initState() {
     super.initState();
     _transferService.start();
+    // Let this device act as a worker for distributed batch tasks.
+    _transferService.taskWorker = TaskWorker(modelService: _modelService);
     _receivedSub = _transferService.receivedFiles.listen(_onFileReceived);
     _loadDevices();
     _loadReceivedFiles();
@@ -210,6 +214,17 @@ class _MainScreenState extends State<MainScreen> {
     );
   }
 
+  void _openBatchTask() {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => BatchTaskScreen(
+          modelService: _modelService,
+          devices: _devices,
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -220,6 +235,7 @@ class _MainScreenState extends State<MainScreen> {
             devices: _devices,
             onDevicesChanged: _loadDevices,
             onDeviceTap: _openSendFile,
+            onBatchTask: _openBatchTask,
           ),
           TalkScreen(
             modelService: _modelService,
@@ -261,12 +277,14 @@ class HomeScreen extends StatefulWidget {
   final List<PairedDevice> devices;
   final VoidCallback onDevicesChanged;
   final void Function(PairedDevice device) onDeviceTap;
+  final VoidCallback onBatchTask;
 
   const HomeScreen({
     super.key,
     required this.devices,
     required this.onDevicesChanged,
     required this.onDeviceTap,
+    required this.onBatchTask,
   });
 
   @override
@@ -313,7 +331,16 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Nexus')),
+      appBar: AppBar(
+        title: const Text('Nexus'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.summarize_outlined),
+            tooltip: 'Batch task',
+            onPressed: widget.onBatchTask,
+          ),
+        ],
+      ),
       body: widget.devices.isEmpty
           ? const Center(
               child: Padding(

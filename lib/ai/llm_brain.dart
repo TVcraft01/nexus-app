@@ -179,6 +179,33 @@ class LlmBrain implements NexusBrain {
     }
   }
 
+  /// Produces a short plain-text summary of [content] with the loaded model.
+  /// Used by the distributed batch-summarization task. Throws if the model is
+  /// unavailable, so a worker that can't summarize fails loudly (and the
+  /// coordinator redistributes its share) instead of returning junk.
+  Future<String> summarizeText(String content) async {
+    if (!await ensureLoaded()) {
+      throw StateError('Local model is not available on this device');
+    }
+    final completion = await _client!.chat.completions.create(
+      model: 'local',
+      messages: [
+        const LlamaChatMessage(
+          role: 'system',
+          content: 'Summarize the following text in 2-4 sentences, capturing '
+              'the key points. Reply with only the summary and no preamble.',
+        ),
+        LlamaChatMessage(role: 'user', content: content),
+      ],
+      maxTokens: 200,
+      temperature: 0.3,
+    );
+    final raw = llamaContentToPlainText(
+      completion.choices.first.message.content,
+    );
+    return _cleanReply(raw);
+  }
+
   /// Tries to read a NexusAction out of the model's JSON reply.
   NexusAction? _parseAction(String raw) {
     final start = raw.indexOf('{');
