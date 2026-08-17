@@ -33,6 +33,9 @@ migrate_working_dir/
 /build/
 /coverage/
 
+# Ad-hoc device test tooling (screenshots + uiautomator helpers)
+/.preview/
+
 # Symbolication related
 app.*.symbols
 
