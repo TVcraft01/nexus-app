@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'command_help_screen.dart';
 import 'keyword_brain.dart';
 import 'llm_brain.dart';
 import 'model_service.dart';
@@ -187,7 +188,18 @@ class _TalkScreenState extends State<TalkScreen> {
     final theme = Theme.of(context);
     final vosk = widget.voskService;
     return Scaffold(
-      appBar: AppBar(title: const Text('Talk to Nexus')),
+      appBar: AppBar(
+        title: const Text('Talk to Nexus'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.help_outline),
+            tooltip: 'What can I say?',
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const CommandHelpScreen()),
+            ),
+          ),
+        ],
+      ),
       body: Column(
         children: [
           Padding(
