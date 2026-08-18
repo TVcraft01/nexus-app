@@ -4,6 +4,7 @@ import '../ai/model_service.dart';
 import '../ai/model_ui.dart';
 import '../models/paired_device.dart';
 import '../remote/remote_access_service.dart';
+import '../sync/known_facts_screen.dart';
 import '../transfer/transfer_service.dart';
 import 'settings_service.dart';
 
@@ -126,6 +127,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const Divider(),
           _sectionHeader('Remote access'),
           _buildRemoteSection(context),
+          const Divider(),
+          _sectionHeader('Shared knowledge'),
+          ListTile(
+            leading: const Icon(Icons.tips_and_updates_outlined),
+            title: const Text('Known facts'),
+            subtitle: const Text(
+                'Reminders and facts shared with your paired devices'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const KnownFactsScreen()),
+            ),
+          ),
           const Divider(),
           _sectionHeader('Paired devices'),
           if (widget.devices.isEmpty)
