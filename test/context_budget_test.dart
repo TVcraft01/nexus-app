@@ -54,6 +54,23 @@ void main() {
     });
   });
 
+  group('canLoadTierWithFreeRam', () {
+    test('sufficient free RAM allows loading', () {
+      expect(canLoadTierWithFreeRam(ModelTier.compact, 4 * 1024 * 1024 * 1024),
+          isTrue);
+    });
+
+    test('insufficient free RAM refuses loading', () {
+      // The phone case: model installed, but only ~1.4 GB free vs 3 GB needed.
+      expect(canLoadTierWithFreeRam(ModelTier.compact, 1400 * 1024 * 1024),
+          isFalse);
+    });
+
+    test('unknown free RAM never blocks (platforms without /proc/meminfo)', () {
+      expect(canLoadTierWithFreeRam(ModelTier.compact, 0), isTrue);
+    });
+  });
+
   group('qwenChatPrompt', () {
     test('wraps system and user roles in ChatML with an assistant opener', () {
       final prompt = qwenChatPrompt(

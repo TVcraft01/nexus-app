@@ -99,12 +99,16 @@ class BatchSummaryCoordinator {
   /// Model load can be slow, so this scales with the share size.
   Duration timeoutFor(int itemCount) => Duration(seconds: 30 + 60 * itemCount);
 
-  /// Asks each paired device whether it has a model (and which tier). This
-  /// device is included first when it has a model. Devices in command-mode
-  /// only are omitted — surfaced in the UI, not silently dropped.
+  /// Asks each paired device whether it has a model it can load RIGHT NOW (and
+  /// which tier). This device is included first when it qualifies. A device is
+  /// skipped when it has no model, OR when it has one installed but currently
+  /// lacks the free RAM to load it — reporting "installed" as "loadable" was
+  /// what dispatched work to a RAM-starved phone and relied on failure /
+  /// redistribution to recover. Redistribution stays as a safety net for
+  /// genuine mid-task failures, not the primary exclusion mechanism.
   Future<List<WorkerInfo>> discoverWorkers() async {
     final workers = <WorkerInfo>[];
-    if (localWorker.isAvailable) {
+    if (localWorker.isAvailable && await localWorker.canLoadNow()) {
       workers.add(WorkerInfo(
         id: 'self',
         name: 'This device',

@@ -186,6 +186,13 @@ int contentCharBudget(int contextSizeTokens) {
   return (content.substring(0, budget), true);
 }
 
+/// Whether [freeRamBytes] currently meets [tier]'s memory requirement. This is
+/// the exact check [LlmBrain.ensureLoaded] runs right before loading — exposed
+/// here so /status and the task coordinator can report/skip a device that has
+/// a model installed but can't actually load it right now. An unknown/zero
+/// reading never blocks (some platforms can't read /proc/meminfo).
+bool canLoadTierWithFreeRam(ModelTier tier, int freeRamBytes) =>
+    freeRamBytes <= 0 || freeRamBytes >= tier.minFreeRamBytes;
 
 String _bytesToGb(int bytes) =>
     '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(1)} GB';

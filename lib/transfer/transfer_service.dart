@@ -214,16 +214,29 @@ class TransferService {
       );
     }
 
-    // Capability check for the batch task: does this device have a model
-    // loaded, and which tier? Lightweight, like /ping.
+    // Capability check for the batch task: does this device have a model that
+    // can actually be loaded RIGHT NOW, and which tier? "Installed" is not the
+    // same as "loadable" — under memory pressure a device may have the model
+    // file but not the free RAM to load it. Reporting that distinction up front
+    // lets the coordinator skip such a device instead of dispatching work that
+    // fails and relies on redistribution to recover.
     if (request.method == 'GET' && request.url.path == 'status') {
       final worker = taskWorker;
+      final installed = worker?.isAvailable ?? false;
+      final loadable = installed && await (worker?.canLoadNow() ?? Future.value(false));
       return Response.ok(
         jsonEncode({
           'deviceId': await _thisDeviceId(),
           'deviceName': await _thisDeviceName(),
-          'llmAvailable': worker?.isAvailable ?? false,
+          // True only when the model can be loaded right now. This is what the
+          // coordinator checks; an installed-but-RAM-starved device reports
+          // false here and is skipped up front.
+          'llmAvailable': loadable,
           'llmTier': worker?.tierId,
+          'llmInstalled': installed,
+          'llmStatus': !installed
+              ? 'none'
+              : (loadable ? 'ready' : 'installed_but_unloadable'),
         }),
         headers: {'content-type': 'application/json'},
       );

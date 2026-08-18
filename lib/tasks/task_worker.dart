@@ -1,5 +1,6 @@
 import '../ai/llm_brain.dart';
 import '../ai/model_service.dart';
+import '../ai/model_tiers.dart';
 import 'task_protocol.dart';
 
 /// The local half of the batch-summarization task: reports whether this
@@ -16,10 +17,21 @@ class TaskWorker {
 
   TaskWorker({required this.modelService});
 
-  /// True when a model is installed and could be loaded for the task. The
-  /// model is still loaded lazily on first use; a load failure mid-task makes
-  /// that item fail and get redistributed by the coordinator.
+  /// True when a model is installed. This is a *capability* flag — the model
+  /// is still loaded lazily on first use. See [canLoadNow] for whether it can
+  /// actually be loaded right now (it may not, under memory pressure).
   bool get isAvailable => modelService.isReady && modelService.modelPath != null;
+
+  /// True when a model is installed AND the device currently has enough free
+  /// RAM to load it — the same free-RAM check [LlmBrain.ensureLoaded] runs
+  /// before loading. Lets /status and the task coordinator skip a device up
+  /// front instead of dispatching work that will fail and need redistributing.
+  Future<bool> canLoadNow() async {
+    if (!isAvailable) return false;
+    final tier = modelService.tier;
+    if (tier == null) return true;
+    return canLoadTierWithFreeRam(tier, await readFreeRamBytes());
+  }
 
   /// The installed tier id ('compact'/'balanced'/'large'), or null if none.
   String? get tierId => isAvailable ? modelService.tier?.id : null;
