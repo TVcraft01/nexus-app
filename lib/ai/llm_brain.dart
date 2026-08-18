@@ -13,6 +13,31 @@ import 'nexus_brain.dart';
 /// than a hard context-overflow failure.
 const String kTruncationNote = '[truncated — file exceeds model context]';
 
+/// Formats a prompt the way the Qwen2.5 models are actually trained to see it
+/// (the ChatML-style `<|im_start|>` format). All three Nexus tiers are Qwen2.5
+/// GGUFs, and their vocabularies contain the `<|im_start|>`/`<|im_end|>`
+/// tokens.
+///
+/// Why this exists: lib_llama_cpp 0.7.3 only runs the model's Jinja chat
+/// template when the request forces "messages" generation (tools/media/etc.).
+/// For a plain text chat it falls back to naive `"role: content"`
+/// concatenation — which is why the model regurgitated input and past runs
+/// showed a stray "system:" label. Sending the fully-formatted prompt as one
+/// user message sidesteps that binding quirk entirely.
+String qwenChatPrompt({String? system, required String user}) {
+  final b = StringBuffer();
+  if (system != null && system.isNotEmpty) {
+    b.writeln('<|im_start|>system');
+    b.writeln(system);
+    b.writeln('<|im_end|>');
+  }
+  b.writeln('<|im_start|>user');
+  b.writeln(user);
+  b.writeln('<|im_end|>');
+  b.write('<|im_start|>assistant');
+  return b.toString();
+}
+
 /// What stage the local LLM's loading is in. The Talk screen watches this so
 /// it can show unambiguously whether a reply came from the LLM or from the
 /// built-in keyword parser.
@@ -139,9 +164,13 @@ class LlmBrain implements NexusBrain {
     try {
       final completion = await _client!.chat.completions.create(
         model: 'local',
+        // Send the fully-formatted ChatML prompt as ONE user message. The
+        // binding only runs the Jinja template when it decides to generate
+        // "messages"; for a plain text chat it naive-concatenates
+        // "system: …" / "user: …" instead, which the Qwen2.5 model doesn't
+        // parse as instructions (the "stray system: label" quirk).
         messages: [
-          LlamaChatMessage(role: 'system', content: system),
-          LlamaChatMessage(role: 'user', content: input),
+          LlamaChatMessage(role: 'user', content: qwenChatPrompt(system: system, user: input)),
         ],
         maxTokens: 220,
         temperature: 0.2,
@@ -201,16 +230,16 @@ class LlmBrain implements NexusBrain {
     // real summary beats a hard context-overflow failure.
     final budget = contentCharBudget(contextSize);
     final (clipped, truncated) = truncateContentToBudget(content, budget);
+    final prompt = qwenChatPrompt(
+      system: 'Summarize the following text in 2-4 sentences, capturing the '
+          'key points. Reply with only the summary and no preamble.',
+      user: clipped,
+    );
     final completion = await _client!.chat.completions.create(
       model: 'local',
-      messages: [
-        const LlamaChatMessage(
-          role: 'system',
-          content: 'Summarize the following text in 2-4 sentences, capturing '
-              'the key points. Reply with only the summary and no preamble.',
-        ),
-        LlamaChatMessage(role: 'user', content: clipped),
-      ],
+      // Single user message with the full ChatML prompt (same reasoning as
+      // interpret(): the binding's plain-text path bypasses the template).
+      messages: [LlamaChatMessage(role: 'user', content: prompt)],
       maxTokens: 200,
       temperature: 0.3,
     );

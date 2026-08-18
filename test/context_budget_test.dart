@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:nexus_app/ai/llm_brain.dart';
 import 'package:nexus_app/ai/model_tiers.dart';
 import 'package:nexus_app/tasks/batch_task_screen.dart';
 import 'package:nexus_app/tasks/split_plan.dart';
@@ -50,6 +51,29 @@ void main() {
       final (text, truncated) = truncateContentToBudget('x' * (budget + 1), budget);
       expect(truncated, isTrue);
       expect(text, isNotEmpty);
+    });
+  });
+
+  group('qwenChatPrompt', () {
+    test('wraps system and user roles in ChatML with an assistant opener', () {
+      final prompt = qwenChatPrompt(
+        system: 'Be concise.',
+        user: 'Summarize this: hello world',
+      );
+      expect(prompt, contains('<|im_start|>system\nBe concise.\n<|im_end|>'));
+      expect(prompt,
+          contains('<|im_start|>user\nSummarize this: hello world\n<|im_end|>'));
+      // Must end with the assistant opener so the model continues from it —
+      // no stray "system:" / "user:" labels (the naive-concat quirk).
+      expect(prompt, endsWith('<|im_start|>assistant'));
+      expect(prompt, isNot(contains('system: ')));
+    });
+
+    test('omits the system block when there is none', () {
+      final prompt = qwenChatPrompt(user: 'only a user message');
+      expect(prompt, isNot(contains('<|im_start|>system')));
+      expect(prompt, contains('<|im_start|>user'));
+      expect(prompt, endsWith('<|im_start|>assistant'));
     });
   });
 
