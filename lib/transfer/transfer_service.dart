@@ -14,6 +14,7 @@ import 'package:shelf/shelf_io.dart' as shelf_io;
 import '../models/paired_device.dart';
 import '../pairing/pairing_service.dart';
 import '../remote/remote_access_service.dart';
+import '../sync/sync_service.dart';
 import '../tasks/task_crypto.dart';
 import '../tasks/task_protocol.dart';
 import '../tasks/task_worker.dart';
@@ -249,6 +250,17 @@ class TransferService {
       return _handleTask(request);
     }
 
+    // Knowledge sync: exchange newer reminder/fact events with a paired device
+    // in one encrypted round trip. Auth + encryption identical to /task.
+    if (request.method == 'POST' && request.url.path == 'sync') {
+      final key = request.headers['x-nexus-key'] ?? '';
+      final device = await _deviceForPairingKey(key);
+      if (device == null) {
+        return Response.forbidden('device not paired');
+      }
+      return SyncService.instance.handleSyncRequest(request, device);
+    }
+
     if (request.method != 'POST' || request.url.path != 'receive') {
       return Response.notFound('not found');
     }
@@ -304,6 +316,11 @@ class TransferService {
     await _saveToHistory(record);
     _receivedController.add(received);
     _historyController.add(record);
+
+    // The sender just proved it's reachable — a natural moment to exchange
+    // knowledge (reminders/facts). Best-effort; a slow peer is never a reason
+    // to fail the file transfer.
+    unawaited(SyncService.instance.syncAll());
 
     final myPublic = RemoteAccessService.instance.publicAddress;
     return Response.ok(
@@ -422,6 +439,9 @@ class TransferService {
       }
       await response.drain<void>();
       await _logSent(target, file);
+      // The peer answered us — sync knowledge with all paired devices while
+      // we know at least one is reachable. Best-effort, never blocks the send.
+      unawaited(SyncService.instance.syncAll());
     } on SocketException {
       throw Exception('Could not reach ${target.deviceName}.');
     } on TimeoutException {

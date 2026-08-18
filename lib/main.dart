@@ -14,6 +14,8 @@ import 'remote/remote_access_service.dart';
 import 'pairing/qr_pairing_screen.dart';
 import 'pairing/qr_scan_screen.dart';
 import 'settings/settings_screen.dart';
+import 'sync/knowledge_store.dart';
+import 'sync/sync_service.dart';
 import 'tasks/batch_task_screen.dart';
 import 'tasks/task_worker.dart';
 import 'transfer/files_screen.dart';
@@ -69,10 +71,20 @@ class _MainScreenState extends State<MainScreen> {
     _transferService.start();
     // Let this device act as a worker for distributed batch tasks.
     _transferService.taskWorker = TaskWorker(modelService: _modelService);
+    // Knowledge sync: reminders/facts shared directly between paired devices.
+    SyncService.instance.init(
+      receivePort: TransferService.receivePort,
+      devicesProvider: () => _pairingService.getPairedDevices(),
+    );
+    KnowledgeStore.instance.init();
     _receivedSub = _transferService.receivedFiles.listen(_onFileReceived);
     _historySub =
         _transferService.transferHistory.listen((_) => _loadTransferHistory());
-    _loadDevices();
+    _loadDevices().then((_) {
+      // Sync shortly after startup, once the server is bound and devices are
+      // known. Best-effort: unreachable peers just catch up later.
+      Future.delayed(const Duration(seconds: 3), SyncService.instance.syncAll);
+    });
     _loadReceivedFiles();
     _loadTransferHistory();
     _modelService.init().then((_) {
