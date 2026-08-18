@@ -4,9 +4,9 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 
-/// What kind of knowledge an event carries. Both kinds are append-only — an
+/// What kind of knowledge an event carries. Every kind is append-only — an
 /// event is created once, given an id that never changes, and never edited.
-enum KnowledgeEventType { reminder, fact }
+enum KnowledgeEventType { reminder, fact, preference }
 
 /// One entry in the append-only knowledge log.
 ///
@@ -92,6 +92,12 @@ class KnowledgeStore extends ChangeNotifier {
   Future<void> init() async {
     final prefs = await SharedPreferences.getInstance();
     _deviceId = prefs.getString(_deviceIdKey) ?? '';
+    // Ensure this device has a stable id even before its first pairing, so
+    // preference checks that compare against it can rely on it being set.
+    if (_deviceId.isEmpty) {
+      _deviceId = _uuid.v4();
+      await prefs.setString(_deviceIdKey, _deviceId);
+    }
     _deviceName = prefs.getString(_deviceNameKey) ?? 'This device';
     final raw = prefs.getStringList(_eventsKey) ?? [];
     _events
@@ -116,6 +122,51 @@ class KnowledgeStore extends ChangeNotifier {
   /// e.g. \"user asked to create a folder named X\" — never invented learning.
   Future<KnowledgeEvent> addFact(String text) =>
       addEvent(KnowledgeEventType.fact, {'text': text});
+
+  /// Records a learned preference. [key] names the preference (e.g.
+  /// "notify_device"), [value] is its value (for notify_device, the deviceId
+  /// that should receive notifications — empty means "all devices").
+  /// [valueName] is a human-readable label for display; the id is what gets
+  /// compared at fire time, but a name survives a device being renamed.
+  ///
+  /// Preferences are append-only like everything else: "changing" a preference
+  /// adds a newer event, and the latest one for a key wins.
+  Future<KnowledgeEvent> addPreference(
+    String key,
+    String value, {
+    String? valueName,
+  }) =>
+      addEvent(KnowledgeEventType.preference, {
+        'key': key,
+        'value': value,
+        if (valueName != null && valueName.isNotEmpty) 'valueName': valueName,
+      });
+
+  /// The most recent preference event for [key], or null if none exists.
+  KnowledgeEvent? currentPreference(String key) {
+    for (final e in _events.reversed) {
+      if (e.type == KnowledgeEventType.preference &&
+          e.payload['key'] == key) {
+        return e;
+      }
+    }
+    return null;
+  }
+
+  /// Whether a reminder firing on THIS device should actually show a local
+  /// notification, given the current "notify_device" preference.
+  ///
+  /// True (fire) when no preference is set or it was cleared — the opt-in
+  /// default is unchanged: every device notifies. False (skip) only when a
+  /// preference targets a DIFFERENT device id. The reminder still lives in the
+  /// shared log on this device either way; it just doesn't interrupt here.
+  bool shouldNotifyLocally() {
+    final pref = currentPreference('notify_device');
+    if (pref == null) return true;
+    final value = pref.payload['value'] as String? ?? '';
+    if (value.isEmpty) return true;
+    return value == deviceId;
+  }
 
   Future<KnowledgeEvent> addEvent(
     KnowledgeEventType type,

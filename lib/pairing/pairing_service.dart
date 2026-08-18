@@ -46,6 +46,7 @@ class PairingService {
       ipAddress: ip,
       port: pairingPort,
       pairingKey: pairingKey,
+      platform: Platform.operatingSystem, // "android", "linux", ...
     );
   }
 

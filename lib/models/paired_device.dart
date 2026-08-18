@@ -15,6 +15,12 @@ class PairedDevice {
   /// Used only for the opt-in remote-connect path, after the local IP fails.
   final String? publicAddress;
 
+  /// The platform this device reported at pairing time ("android", "ios",
+  /// "linux", "windows", "macos"). Devices paired before this field existed
+  /// have null here; [platformFamily] falls back to the device name in that
+  /// case so spoken references like "my phone" still resolve.
+  final String? platform;
+
   /// base64 AES-256 key derived from [pairingKey] via HKDF. Used only to
   /// encrypt/decrypt file transfers; the raw pairing key is never used as a
   /// key directly.
@@ -28,6 +34,7 @@ class PairedDevice {
     required this.pairingKey,
     String? transferKey,
     this.publicAddress,
+    this.platform,
   }) : transferKey = transferKey ?? deriveTransferKeyBase64(pairingKey);
 
   /// Turns this device's info into JSON — this JSON string is what actually
@@ -40,6 +47,7 @@ class PairedDevice {
         'pairingKey': pairingKey,
         'transferKey': transferKey,
         if (publicAddress != null) 'publicAddress': publicAddress,
+        if (platform != null) 'platform': platform,
       };
 
   /// Rebuilds a PairedDevice from the JSON that came out of a scanned QR code
@@ -53,6 +61,7 @@ class PairedDevice {
         pairingKey: json['pairingKey'] as String,
         transferKey: json['transferKey'] as String?,
         publicAddress: json['publicAddress'] as String?,
+        platform: json['platform'] as String?,
       );
 
   PairedDevice copyWith({
@@ -62,6 +71,7 @@ class PairedDevice {
     int? port,
     String? pairingKey,
     String? publicAddress,
+    String? platform,
     bool clearPublicAddress = false,
   }) =>
       PairedDevice(
@@ -71,7 +81,66 @@ class PairedDevice {
         port: port ?? this.port,
         pairingKey: pairingKey ?? this.pairingKey,
         publicAddress: clearPublicAddress ? null : (publicAddress ?? this.publicAddress),
+        platform: platform ?? this.platform,
         // Re-derive whenever the pairing key changes, otherwise keep it.
         transferKey: pairingKey == null ? transferKey : null,
       );
+
+  /// The device's platform family, resolved from the explicit [platform] field
+  /// with a name-based fallback for devices paired before platform was
+  /// recorded. Returns one of "android", "ios", "linux", "windows", "macos",
+  /// or null when it can't be determined.
+  String? get platformFamily {
+    final p = platform?.toLowerCase();
+    if (const {'android', 'ios', 'linux', 'windows', 'macos'}.contains(p)) {
+      return p;
+    }
+    final n = deviceName.toLowerCase();
+    if (n.contains('phone') || n.contains('android')) return 'android';
+    if (n.contains('pc') ||
+        n.contains('laptop') ||
+        n.contains('computer') ||
+        n.contains('desktop') ||
+        n.contains('linux') ||
+        n.contains('windows') ||
+        n.contains('mac')) {
+      return 'linux';
+    }
+    return null;
+  }
+
+  /// Whether this device reads as a hand-held phone (Android/iOS).
+  bool get isPhone {
+    final f = platformFamily;
+    return f == 'android' || f == 'ios';
+  }
+
+  /// Whether this device reads as a desktop/laptop computer.
+  bool get isComputer {
+    final f = platformFamily;
+    return f == 'linux' || f == 'windows' || f == 'macos';
+  }
+}
+
+/// Resolves a spoken device reference ("phone", "pc", "laptop", "computer",
+/// "desktop", "tablet") to the paired devices it could mean.
+///
+/// "phone"/"tablet" map to hand-held (Android/iOS) devices, and the rest map
+/// to desktop OSes. Returns ALL matches — never a guess — so the caller can
+/// act when there's exactly one and ask for clarification when there are
+/// several.
+List<PairedDevice> resolveDeviceReference(
+  String deviceRef,
+  List<PairedDevice> devices,
+) {
+  final ref = deviceRef.toLowerCase().trim();
+  final phones = const {'phone', 'mobile', 'tablet'};
+  final computers = const {'pc', 'laptop', 'computer', 'desktop'};
+  if (phones.contains(ref)) {
+    return devices.where((d) => d.isPhone).toList();
+  }
+  if (computers.contains(ref)) {
+    return devices.where((d) => d.isComputer).toList();
+  }
+  return const [];
 }
