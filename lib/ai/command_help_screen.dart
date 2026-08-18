@@ -58,6 +58,18 @@ const List<CommandHelpEntry> commandHelpEntries = [
       'remind me to stretch in 2 hours',
     ],
   ),
+  CommandHelpEntry(
+    title: 'Choose which device notifies you',
+    icon: Icons.notifications_outlined,
+    description: 'Tells Nexus to only interrupt you on one paired device for '
+        'reminders. Reminders still sync everywhere; only the chosen device '
+        'fires a notification. Clear it in Settings -> Notifications.',
+    examples: [
+      'only remind me on my phone',
+      'always notify me on my phone',
+      'notifications only on my laptop',
+    ],
+  ),
 ];
 
 /// Renders the help list. Reads only [commandHelpEntries], so it needs no

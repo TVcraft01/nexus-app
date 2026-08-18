@@ -5,6 +5,7 @@ import '../ai/model_ui.dart';
 import '../models/paired_device.dart';
 import '../remote/remote_access_service.dart';
 import '../sync/known_facts_screen.dart';
+import '../sync/knowledge_store.dart';
 import '../transfer/transfer_service.dart';
 import 'settings_service.dart';
 
@@ -140,6 +141,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ),
           const Divider(),
+          _sectionHeader('Notifications'),
+          _buildNotificationsSection(context),
+          const Divider(),
           _sectionHeader('Paired devices'),
           if (widget.devices.isEmpty)
             const Padding(
@@ -203,6 +207,49 @@ class _SettingsScreenState extends State<SettingsScreen> {
               letterSpacing: 1.2,
             ),
       ),
+    );
+  }
+
+  /// Shows the learned "which device notifies" preference, with a way to
+  /// clear it back to the default (every device notifies).
+  Widget _buildNotificationsSection(BuildContext context) {
+    return ListenableBuilder(
+      listenable: KnowledgeStore.instance,
+      builder: (context, _) {
+        final store = KnowledgeStore.instance;
+        final pref = store.currentPreference('notify_device');
+        final value = pref?.payload['value'] as String? ?? '';
+        final name = pref?.payload['valueName'] as String? ?? '';
+
+        final title = value.isEmpty
+            ? 'Notify on all devices'
+            : 'Notifications only on ${name.isEmpty ? 'this device' : name}';
+        final subtitle = value.isEmpty
+            ? 'Each paired device that has a reminder will fire its own '
+                'notification.'
+            : 'Reminders still sync to every device, but only $name'
+                '${name.isEmpty ? '' : ' '}interrupts you with a notification.';
+
+        return ListTile(
+          leading: Icon(
+            value.isEmpty
+                ? Icons.notifications_active_outlined
+                : Icons.notifications_off_outlined,
+          ),
+          title: Text(title),
+          subtitle: Text(subtitle),
+          trailing: value.isEmpty
+              ? null
+              : TextButton(
+                  onPressed: () async {
+                    // Appending an empty-value preference clears it; the
+                    // latest event for a key wins.
+                    await store.addPreference('notify_device', '');
+                  },
+                  child: const Text('Clear'),
+                ),
+        );
+      },
     );
   }
 

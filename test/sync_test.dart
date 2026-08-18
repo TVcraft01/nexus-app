@@ -159,6 +159,45 @@ void main() {
           reason: 'a duplicate sync must not fire the reminder twice');
     });
 
+    test('a preference event syncs like reminders and facts', () async {
+      final storeA = KnowledgeStore()
+        ..debugSetIdentity(deviceId: 'A', deviceName: 'PC');
+      final storeB = KnowledgeStore()
+        ..debugSetIdentity(deviceId: 'B', deviceName: 'Phone');
+
+      await storeA.addPreference('notify_device', 'B', valueName: 'Phone');
+      final factB = await storeB.addFact('Created a folder named "Notes"');
+
+      final deviceB = PairedDevice(
+        deviceId: 'B',
+        deviceName: 'Phone',
+        ipAddress: '127.0.0.1',
+        port: 0,
+        pairingKey: 'test-pair-key',
+      );
+      final syncB = SyncService(store: storeB)
+        ..init(
+          receivePort: 0,
+          devicesProvider: () async => const [],
+          scheduleReminder: (when, message) async {},
+        );
+      final (_, server) = await servePeer(syncB, deviceB);
+      final syncA = SyncService(store: storeA)
+        ..init(
+          receivePort: server.port,
+          devicesProvider: () async => const [],
+          scheduleReminder: (when, message) async {},
+        );
+
+      expect(await syncA.syncWith(deviceB), isTrue);
+
+      // The preference reached B and B's fact reached A: the union holds.
+      expect(storeB.currentPreference('notify_device')?.payload['value'], 'B');
+      expect(storeB.currentPreference('notify_device')?.payload['valueName'],
+          'Phone');
+      expect(storeA.events.any((e) => e.id == factB.id), isTrue);
+    });
+
     test('an unreachable peer fails gracefully and is not an error', () async {
       final storeA = KnowledgeStore()
         ..debugSetIdentity(deviceId: 'A', deviceName: 'PC');

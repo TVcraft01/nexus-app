@@ -108,18 +108,12 @@ class _KnownFactsScreenState extends State<KnownFactsScreen> {
                     dense: true,
                     contentPadding: EdgeInsets.zero,
                     leading: Icon(
-                      e.type == KnowledgeEventType.reminder
-                          ? Icons.alarm
-                          : Icons.tips_and_updates_outlined,
+                      _iconFor(e),
                       color: e.type == KnowledgeEventType.reminder
                           ? theme.colorScheme.tertiary
                           : theme.colorScheme.primary,
                     ),
-                    title: Text(
-                      e.type == KnowledgeEventType.reminder
-                          ? _reminderText(e)
-                          : (e.payload['text'] as String? ?? ''),
-                    ),
+                    title: Text(_titleFor(e)),
                     subtitle: Text(
                       'from ${e.originDeviceName} · ${_relativeTime(e.createdAt)}',
                     ),
@@ -140,5 +134,39 @@ class _KnownFactsScreenState extends State<KnownFactsScreen> {
         : '${when.hour.toString().padLeft(2, '0')}:'
             '${when.minute.toString().padLeft(2, '0')}';
     return 'Reminder ($time): $message';
+  }
+
+  IconData _iconFor(KnowledgeEvent e) {
+    switch (e.type) {
+      case KnowledgeEventType.reminder:
+        return Icons.alarm;
+      case KnowledgeEventType.preference:
+        return Icons.notifications_outlined;
+      case KnowledgeEventType.fact:
+        return Icons.tips_and_updates_outlined;
+    }
+  }
+
+  String _titleFor(KnowledgeEvent e) {
+    switch (e.type) {
+      case KnowledgeEventType.reminder:
+        return _reminderText(e);
+      case KnowledgeEventType.preference:
+        return _preferenceText(e);
+      case KnowledgeEventType.fact:
+        return e.payload['text'] as String? ?? '';
+    }
+  }
+
+  String _preferenceText(KnowledgeEvent e) {
+    final key = e.payload['key'] as String? ?? '';
+    final value = e.payload['value'] as String? ?? '';
+    final name = e.payload['valueName'] as String? ?? '';
+    if (key == 'notify_device') {
+      return value.isEmpty
+          ? 'Notifications on all devices'
+          : 'Notifications only on ${name.isEmpty ? 'a device' : name}';
+    }
+    return 'Preference: $key = ${value.isEmpty ? name : value}';
   }
 }
