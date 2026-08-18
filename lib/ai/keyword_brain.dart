@@ -23,6 +23,18 @@ class KeywordBrain implements NexusBrain {
       );
     }
 
+    // Preference must come before the reminder branch: "only remind me on my
+    // phone" contains "remind" but means "change which device notifies", not
+    // "set a reminder".
+    final notifyDevice = _extractNotifyDevicePreference(input);
+    if (notifyDevice != null) {
+      return NexusAction(
+        command: NexusCommand.setPreference,
+        reply: 'Got it.', // the runner confirms with the resolved device name
+        args: {'key': 'notify_device', 'deviceRef': notifyDevice},
+      );
+    }
+
     if (_hasAny(t, const ['remind', 'reminder', 'alarm', 'notify'])) {
       final when = _parseReminderTime(input);
       if (when == null) {
@@ -48,6 +60,28 @@ class KeywordBrain implements NexusBrain {
   }
 
   bool _hasAny(String text, List<String> words) => words.any(text.contains);
+
+  /// Recognizes "notify/remind me (only/always) on my `device`" and
+  /// "notifications only on my `device`" as a notify-device preference.
+  /// Returns the device reference word ("phone", "pc", ...) or null when the
+  /// phrase isn't about choosing where notifications go.
+  ///
+  /// Deliberately does NOT match "remind me to X on my phone" — that's a
+  /// reminder with a message, not a preference.
+  String? _extractNotifyDevicePreference(String input) {
+    final t = input.toLowerCase();
+    final match = RegExp(
+      r'(?:(?:only|always|just)\s+)?(?:remind|notify|notifications?|reminders?|alerts?)'
+      r'(?:\s+me)?(?:\s+(?:only|always|just))?\s+on\s+my\s+(\w+)',
+    ).firstMatch(t);
+    if (match == null) return null;
+    final device = match.group(1)!;
+    if (!const {'phone', 'pc', 'laptop', 'computer', 'desktop', 'tablet'}
+        .contains(device)) {
+      return null;
+    }
+    return device;
+  }
 
   String _extractFolderName(String input) {
     final match = RegExp(

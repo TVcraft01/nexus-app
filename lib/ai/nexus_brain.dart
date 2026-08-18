@@ -1,5 +1,11 @@
 /// Commands the local brain can understand and act on.
-enum NexusCommand { createFolder, openWifiSettings, setReminder, unknown }
+enum NexusCommand {
+  createFolder,
+  openWifiSettings,
+  setReminder,
+  setPreference,
+  unknown,
+}
 
 /// The result of interpreting a user's words: a command, any arguments needed
 /// to carry it out, and a human-readable reply.

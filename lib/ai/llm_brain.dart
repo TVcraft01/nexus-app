@@ -154,12 +154,14 @@ class LlmBrain implements NexusBrain {
 
     final system = 'You are Nexus, a private on-device assistant. '
         'Respond with ONLY one JSON object and nothing else, with this shape: '
-        '{"command":"createFolder|openWifiSettings|setReminder|chat",'
+        '{"command":"createFolder|openWifiSettings|setReminder|setPreference|chat",'
         '"args":{},"reply":"short reply to the user (max 2 sentences)". '
         'Rules: for createFolder put the folder name in args.name. '
         'For setReminder put an ISO-8601 time in args.when and the thing to '
-        'remember in args.message. For anything else use command "chat" and '
-        'write your helpful answer in reply.';
+        'remember in args.message. For setPreference put args.key="notify_device" '
+        'and args.deviceRef as one of phone, pc, laptop, computer, desktop, or '
+        'tablet (the device the user wants to be notified on). For anything else '
+        'use command "chat" and write your helpful answer in reply.';
 
     try {
       final completion = await _client!.chat.completions.create(
@@ -295,6 +297,23 @@ class LlmBrain implements NexusBrain {
           command: NexusCommand.setReminder,
           reply: reply.isEmpty ? 'Reminder set.' : reply,
           args: {'when': when, 'message': (args['message'] as String?) ?? 'Reminder'},
+        );
+      case 'setpreference':
+        final deviceRef =
+            (args['deviceRef'] as String?)?.trim().toLowerCase() ?? '';
+        if (deviceRef.isEmpty) {
+          return NexusAction(
+            command: NexusCommand.unknown,
+            reply: _cleanReply(reply.isEmpty ? raw : reply),
+          );
+        }
+        return NexusAction(
+          command: NexusCommand.setPreference,
+          reply: reply.isEmpty ? 'Got it.' : reply,
+          args: {
+            'key': (args['key'] as String?) ?? 'notify_device',
+            'deviceRef': deviceRef,
+          },
         );
       default:
         return NexusAction(

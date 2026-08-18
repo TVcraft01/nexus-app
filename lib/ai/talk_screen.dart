@@ -7,6 +7,7 @@ import 'model_service.dart';
 import 'nexus_action_runner.dart';
 import 'nexus_brain.dart';
 import 'vosk_service.dart';
+import '../models/paired_device.dart';
 
 /// The "Talk to Nexus" entry point: type a command, or tap the mic and speak.
 /// Nexus decides what it means with the local brain (the downloaded LLM when
@@ -16,10 +17,15 @@ class TalkScreen extends StatefulWidget {
   final ModelService modelService;
   final VoskService voskService;
 
+  /// Supplies the paired-devices list, so a "notify on my phone" preference
+  /// can resolve "my phone" to an actual device.
+  final Future<List<PairedDevice>> Function() devicesProvider;
+
   const TalkScreen({
     super.key,
     required this.modelService,
     required this.voskService,
+    required this.devicesProvider,
   });
 
   @override
@@ -27,13 +33,19 @@ class TalkScreen extends StatefulWidget {
 }
 
 class _TalkScreenState extends State<TalkScreen> {
-  final NexusActionRunner _runner = NexusActionRunner();
+  late final NexusActionRunner _runner;
   final TextEditingController _controller = TextEditingController();
   final List<({bool fromUser, String text})> _messages = [];
   bool _busy = false;
 
   LlmBrain? _llmBrain;
   String? _llmBrainModelPath;
+
+  @override
+  void initState() {
+    super.initState();
+    _runner = NexusActionRunner(devicesProvider: widget.devicesProvider);
+  }
 
   NexusBrain get _brain {
     final model = widget.modelService;
@@ -67,8 +79,11 @@ class _TalkScreenState extends State<TalkScreen> {
       _busy = true;
     });
 
-    final action = await _brain.interpret(input);
-    final response = await _runner.run(action);
+    // If Nexus just asked "Which device?", the reply is the answer to that
+    // question — don't run it through the brain as a fresh command.
+    final clarification = await _runner.answerClarification(input);
+    final response = clarification ??
+        await _runner.run(await _brain.interpret(input));
     await _runner.speak(response);
 
     if (!mounted) return;

@@ -275,6 +275,7 @@ class _MainScreenState extends State<MainScreen> {
           TalkScreen(
             modelService: _modelService,
             voskService: _voskService,
+            devicesProvider: () => _pairingService.getPairedDevices(),
           ),
           SettingsScreen(
             devices: _devices,

@@ -6,6 +6,8 @@ import 'package:flutter_timezone/flutter_timezone.dart';
 import 'package:timezone/data/latest.dart' as tzdata;
 import 'package:timezone/timezone.dart' as tz;
 
+import '../sync/knowledge_store.dart';
+
 /// Shows local, on-device reminders.
 ///
 /// On Android the reminder is scheduled with the OS so it fires even if the
@@ -45,6 +47,10 @@ class ReminderService {
   }
 
   Future<void> scheduleReminder(DateTime when, String message) async {
+    // Respect the learned "which device notifies" preference. The reminder
+    // still lands in the shared log on this device; it just doesn't fire a
+    // local notification here if the user asked to be notified elsewhere.
+    if (!KnowledgeStore.instance.shouldNotifyLocally()) return;
     await _ensureReady();
 
     const details = NotificationDetails(
