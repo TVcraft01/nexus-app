@@ -162,6 +162,31 @@ ModelTier? pickTierFor(DeviceCapability cap) {
   return null;
 }
 
+/// Rough prompt overhead in tokens (system instruction, template wrappers, and
+/// the generation prompt) that must be reserved OUT of a tier's context window
+/// before file content is budgeted. Generous on purpose — under-budgeting is
+/// what caused the context-overflow hard failures.
+const int kPromptOverheadTokens = 96;
+
+/// Character budget for file content handed to a model loaded with
+/// [contextSizeTokens] of context. Roughly 4 chars per token (fine as a safe
+/// estimate; it does not need to be exact), minus template overhead, with a
+/// floor so tiny contexts never round to nothing.
+int contentCharBudget(int contextSizeTokens) {
+  final usable = (contextSizeTokens - kPromptOverheadTokens).clamp(64, 1 << 30);
+  return usable * 4;
+}
+
+/// Truncates [content] so it fits within [budget] characters. Returns the
+/// (possibly unchanged) text and whether truncation actually happened — the
+/// caller appends a visible note when it did, so a truncated-but-real summary
+/// is produced instead of a context-overflow hard failure.
+(String, bool) truncateContentToBudget(String content, int budget) {
+  if (content.length <= budget) return (content, false);
+  return (content.substring(0, budget), true);
+}
+
+
 String _bytesToGb(int bytes) =>
     '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(1)} GB';
 

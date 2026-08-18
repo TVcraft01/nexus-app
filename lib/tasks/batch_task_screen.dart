@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -6,14 +7,30 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import '../ai/model_service.dart';
+import '../ai/model_tiers.dart';
 import '../models/paired_device.dart';
 import 'task_coordinator.dart';
 import 'task_protocol.dart';
 import 'task_worker.dart';
 
-/// Per-file character budget, so one huge note can't blow out the model's
-/// context window.
-const int _maxCharsPerFile = 60000;
+/// How much of a file to read into memory for summarization. The cap is
+/// derived from the SMALLEST participating worker's model context (a file must
+/// fit every worker, since shares are rebalanced live), not a fixed size. When
+/// no worker is known yet, the compact tier's budget is the safe floor — any
+/// real worker can handle at least that much, and workers truncate
+/// defensively in [LlmBrain.summarizeText] anyway.
+int charCapForWorkers(List<WorkerInfo> workers) {
+  final budgets = [
+    for (final w in workers)
+      if (w.tierId != null) contentCharBudget(_contextForTier(w.tierId!)),
+  ];
+  if (budgets.isEmpty) return contentCharBudget(ModelTier.compact.contextSize);
+  return budgets.reduce(math.min);
+}
+
+int _contextForTier(String tierId) =>
+    ModelTier.all.where((t) => t.id == tierId).firstOrNull?.contextSize ??
+    ModelTier.compact.contextSize;
 
 /// The "Batch task" screen: pick several text files, summarize them across
 /// this device and any paired devices that have a local model, and combine the
@@ -68,12 +85,13 @@ class _BatchTaskScreenState extends State<BatchTaskScreen> {
   Future<void> _pickFiles() async {
     final picked = await FilePicker.pickFiles();
     if (picked.isEmpty) return;
+    final cap = charCapForWorkers(_workers);
     final items = <TaskItem>[];
     for (final file in picked) {
       try {
         var content = await file.xFile.readAsString();
-        if (content.length > _maxCharsPerFile) {
-          content = content.substring(0, _maxCharsPerFile);
+        if (content.length > cap) {
+          content = content.substring(0, cap);
         }
         if (content.trim().isEmpty) continue;
         items.add(TaskItem(name: file.name, content: content));
@@ -273,6 +291,13 @@ class _BatchTaskScreenState extends State<BatchTaskScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text('Files (${_items.length})', style: theme.textTheme.titleMedium),
+            Text(
+              'Each file capped at ${charCapForWorkers(_workers)} characters '
+              '(fits the smallest worker model\'s context).',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
             const SizedBox(height: 8),
             ..._items.map(
               (item) => ListTile(

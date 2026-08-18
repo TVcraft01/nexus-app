@@ -8,6 +8,11 @@ import 'keyword_brain.dart';
 import 'model_tiers.dart';
 import 'nexus_brain.dart';
 
+/// Visible marker appended to a summary whose input file had to be truncated
+/// to fit the worker's model context. A truncated-but-real summary is better
+/// than a hard context-overflow failure.
+const String kTruncationNote = '[truncated — file exceeds model context]';
+
 /// What stage the local LLM's loading is in. The Talk screen watches this so
 /// it can show unambiguously whether a reply came from the LLM or from the
 /// built-in keyword parser.
@@ -183,10 +188,19 @@ class LlmBrain implements NexusBrain {
   /// Used by the distributed batch-summarization task. Throws if the model is
   /// unavailable, so a worker that can't summarize fails loudly (and the
   /// coordinator redistributes its share) instead of returning junk.
+  ///
+  /// Oversized files are truncated to this tier's context budget (with a
+  /// visible [kTruncationNote] appended) instead of throwing a
+  /// context-overflow error that kills the whole item.
   Future<String> summarizeText(String content) async {
     if (!await ensureLoaded()) {
       throw StateError('Local model is not available on this device');
     }
+    // Budget the file against THIS tier's context window, leaving room for the
+    // prompt template (system instruction + ChatML wrappers). A truncated-but-
+    // real summary beats a hard context-overflow failure.
+    final budget = contentCharBudget(contextSize);
+    final (clipped, truncated) = truncateContentToBudget(content, budget);
     final completion = await _client!.chat.completions.create(
       model: 'local',
       messages: [
@@ -195,7 +209,7 @@ class LlmBrain implements NexusBrain {
           content: 'Summarize the following text in 2-4 sentences, capturing '
               'the key points. Reply with only the summary and no preamble.',
         ),
-        LlamaChatMessage(role: 'user', content: content),
+        LlamaChatMessage(role: 'user', content: clipped),
       ],
       maxTokens: 200,
       temperature: 0.3,
@@ -203,7 +217,11 @@ class LlmBrain implements NexusBrain {
     final raw = llamaContentToPlainText(
       completion.choices.first.message.content,
     );
-    return _cleanReply(raw);
+    var cleaned = _cleanReply(raw);
+    if (truncated) {
+      cleaned = '$kTruncationNote $cleaned';
+    }
+    return cleaned;
   }
 
   /// Tries to read a NexusAction out of the model's JSON reply.
