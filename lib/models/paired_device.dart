@@ -11,9 +11,13 @@ class PairedDevice {
   final int port; // port Nexus is listening on for handshakes
   final String pairingKey; // shared secret created at pairing time
 
-  /// Last-known public endpoint ("ip:port") shared over a prior connection.
-  /// Used only for the opt-in remote-connect path, after the local IP fails.
+  /// Last-known public TCP endpoint ("ip:port") shared over a prior connection.
+  /// Used only for the opt-in remote-connect path via UPnP/port forwarding.
   final String? publicAddress;
+
+  /// Last-known public UDP endpoint ("ip:port") for hole-punching.
+  /// Shared by the peer's NAT keep-alive; used when the TCP path fails.
+  final String? publicUdpEndpoint;
 
   /// The platform this device reported at pairing time ("android", "ios",
   /// "linux", "windows", "macos"). Devices paired before this field existed
@@ -34,6 +38,7 @@ class PairedDevice {
     required this.pairingKey,
     String? transferKey,
     this.publicAddress,
+    this.publicUdpEndpoint,
     this.platform,
   }) : transferKey = transferKey ?? deriveTransferKeyBase64(pairingKey);
 
@@ -47,6 +52,7 @@ class PairedDevice {
         'pairingKey': pairingKey,
         'transferKey': transferKey,
         if (publicAddress != null) 'publicAddress': publicAddress,
+        if (publicUdpEndpoint != null) 'publicUdpEndpoint': publicUdpEndpoint,
         if (platform != null) 'platform': platform,
       };
 
@@ -61,6 +67,7 @@ class PairedDevice {
         pairingKey: json['pairingKey'] as String,
         transferKey: json['transferKey'] as String?,
         publicAddress: json['publicAddress'] as String?,
+        publicUdpEndpoint: json['publicUdpEndpoint'] as String?,
         platform: json['platform'] as String?,
       );
 
@@ -71,8 +78,10 @@ class PairedDevice {
     int? port,
     String? pairingKey,
     String? publicAddress,
+    String? publicUdpEndpoint,
     String? platform,
     bool clearPublicAddress = false,
+    bool clearPublicUdpEndpoint = false,
   }) =>
       PairedDevice(
         deviceId: deviceId ?? this.deviceId,
@@ -81,6 +90,7 @@ class PairedDevice {
         port: port ?? this.port,
         pairingKey: pairingKey ?? this.pairingKey,
         publicAddress: clearPublicAddress ? null : (publicAddress ?? this.publicAddress),
+        publicUdpEndpoint: clearPublicUdpEndpoint ? null : (publicUdpEndpoint ?? this.publicUdpEndpoint),
         platform: platform ?? this.platform,
         // Re-derive whenever the pairing key changes, otherwise keep it.
         transferKey: pairingKey == null ? transferKey : null,

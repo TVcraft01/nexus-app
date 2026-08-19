@@ -170,12 +170,21 @@ class PairingService {
     await _updateField(deviceId, (map) => map['ipAddress'] = newIp);
   }
 
-  /// Stores a paired device's last-known public endpoint, learned by
+  /// Stores a paired device's last-known public TCP endpoint, learned by
   /// piggybacking on a successful connection (LAN or remote).
   Future<void> updateDevicePublicAddress(
       String deviceId, String publicAddress) async {
     await _updateField(
         deviceId, (map) => map['publicAddress'] = publicAddress);
+  }
+
+  /// Stores a paired device's last-known public UDP endpoint, shared by the
+  /// peer's NAT keep-alive. Used for UDP hole-punching when the TCP path
+  /// fails.
+  Future<void> updateDevicePublicUdpEndpoint(
+      String deviceId, String udpEndpoint) async {
+    await _updateField(
+        deviceId, (map) => map['publicUdpEndpoint'] = udpEndpoint);
   }
 
   Future<void> _updateField(

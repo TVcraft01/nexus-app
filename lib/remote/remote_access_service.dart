@@ -1,13 +1,16 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 
+import '../pairing/pairing_service.dart';
 import '../settings/settings_service.dart';
+import 'nat_keepalive.dart';
 import 'port_mapper.dart';
 import 'stun_client.dart';
 
 /// How a paired device was last reached (or not).
-enum DeviceLinkStatus { unknown, local, remote, unreachable }
+enum DeviceLinkStatus { unknown, local, remote, remoteUdp, unreachable }
 
 /// Drives the opt-in "reach my devices over the internet" feature.
 ///
@@ -30,6 +33,7 @@ class RemoteAccessService extends ChangeNotifier {
   final SettingsService _settings = SettingsService();
   final StunClient _stun = StunClient();
   final PortMapper _mapper = PortMapper();
+  final NatKeepAlive _keepAlive = NatKeepAlive();
 
   bool _enabled = false;
   String? _publicAddress; // "ip:port" when a TCP mapping is open
@@ -40,12 +44,18 @@ class RemoteAccessService extends ChangeNotifier {
 
   bool get enabled => _enabled;
 
-  /// `ip:port` a peer can use to reach us remotely, or null when no mapping is
-  /// currently open.
+  /// `ip:port` a peer can use to reach us remotely (TCP path), or null when
+  /// no mapping is currently open.
   String? get publicAddress => _publicAddress;
 
   /// Our public IP as seen by STUN (informational).
   String? get publicIp => _publicIp;
+
+  /// The public UDP endpoint discovered by NAT keep-alive, or null.
+  NatEndpoint? get publicUdpEndpoint => _keepAlive.endpoint;
+
+  /// The UDP socket kept alive for hole-punch traffic.
+  RawDatagramSocket? get udpSocket => _keepAlive.socket;
 
   DeviceLinkStatus statusOf(String deviceId) =>
       _statuses[deviceId] ?? DeviceLinkStatus.unknown;
@@ -66,9 +76,15 @@ class RemoteAccessService extends ChangeNotifier {
       _refreshTimer = Timer.periodic(const Duration(minutes: 5), (_) {
         refreshPublicAddress();
       });
+      // Start NAT keep-alive: holds a UDP socket open with periodic STUN
+      // probes so home routers don't evict the mapping. When the endpoint
+      // changes, share it with paired devices.
+      _keepAlive.onEndpointChanged = (ep) => _shareUdpEndpoint(ep);
+      _keepAlive.start();
     } else {
       _refreshTimer?.cancel();
       _refreshTimer = null;
+      await _keepAlive.stop();
       await _release();
       _statuses.clear();
     }
@@ -95,6 +111,18 @@ class RemoteAccessService extends ChangeNotifier {
       _statuses[deviceId] = status;
       notifyListeners();
     }
+  }
+
+  /// Shares the current public UDP endpoint with all paired devices so they
+  /// can attempt hole-punching later. Called whenever the endpoint changes.
+  void _shareUdpEndpoint(NatEndpoint ep) {
+    final pairing = PairingService();
+    pairing.getPairedDevices().then((devices) {
+      for (final d in devices) {
+        pairing.updateDevicePublicUdpEndpoint(d.deviceId, ep.hostPort);
+      }
+    });
+    notifyListeners();
   }
 
   Future<void> _release() async {

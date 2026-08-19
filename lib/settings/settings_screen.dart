@@ -580,6 +580,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         return Icons.wifi;
       case DeviceLinkStatus.remote:
         return Icons.cloud;
+      case DeviceLinkStatus.remoteUdp:
+        return Icons.cell_tower;
       case DeviceLinkStatus.unreachable:
         return Icons.cloud_off;
       case DeviceLinkStatus.unknown:
@@ -593,6 +595,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         return Colors.green;
       case DeviceLinkStatus.remote:
         return Colors.blue;
+      case DeviceLinkStatus.remoteUdp:
+        return Colors.teal;
       case DeviceLinkStatus.unreachable:
         return Colors.red;
       case DeviceLinkStatus.unknown:
@@ -606,6 +610,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         return 'Local network';
       case DeviceLinkStatus.remote:
         return 'Remote (direct)';
+      case DeviceLinkStatus.remoteUdp:
+        return 'Remote (UDP direct)';
       case DeviceLinkStatus.unreachable:
         return 'Unreachable';
       case DeviceLinkStatus.unknown:

@@ -558,6 +558,55 @@ class TransferService {
     }
   }
 
+  // ---- UDP receive (hole-punch path) ------------------------------------
+
+  /// Decrypts a transfer payload received over the reliable-UDP channel
+  /// and writes it to the receive directory. The [payload] is the encrypted
+  /// transfer body ("NEXUS1" magic + chunked AES-GCM), already decrypted
+  /// at the transport level by NexusDatagramChannel.
+  ///
+  /// Returns the [ReceivedFile] on success, or throws on decryption failure.
+  Future<ReceivedFile> receiveFromUdp(
+    List<int> payload,
+    PairedDevice sender,
+  ) async {
+    final keyBytes = base64Decode(sender.transferKey);
+
+    final rawName = 'received_file';
+    final dir = await _receiveDir();
+    final dest = _uniquePath(File(p.join(dir.path, rawName)));
+
+    try {
+      final stream = Stream<List<int>>.fromIterable([payload]);
+      await _decryptToFile(stream, dest, keyBytes);
+    } catch (_) {
+      if (await dest.exists()) await dest.delete();
+      rethrow;
+    }
+
+    final received = ReceivedFile(
+      fileName: p.basename(dest.path),
+      sizeBytes: await dest.length(),
+      fromDeviceName: sender.deviceName,
+      savedPath: dest.path,
+      receivedAt: DateTime.now(),
+    );
+    final record = TransferRecord(
+      direction: TransferDirection.received,
+      fileName: received.fileName,
+      sizeBytes: received.sizeBytes,
+      otherDeviceName: received.fromDeviceName,
+      timestamp: received.receivedAt,
+      localPath: received.savedPath,
+    );
+    await _saveToHistory(record);
+    _receivedController.add(received);
+    _historyController.add(record);
+
+    unawaited(SyncService.instance.syncAll());
+    return received;
+  }
+
   // ---- reachability + re-discovery ----------------------------------------
 
   /// True only if a Nexus instance answering at the stored IP reports the same
