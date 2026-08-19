@@ -201,6 +201,64 @@ comfortably run — it never forces a one-size-fits-all choice:
 
 ---
 
+### Idle-time maintenance (the "sleep cycle")
+
+While the device is idle, Nexus does real housekeeping — not literal
+"dreaming", and no simulated "testing new things while sleeping". The copy is
+honest: four real actions, all of them aimed at keeping the app fast and
+keeping its data from growing unbounded forever.
+
+1. **Clean up stale files** (older than 7 days): dev-bridge prompt leftovers
+   and Linux-bundle build artifacts, interrupted model / speech-model
+   downloads, and abandoned temporary copies of picked files. It only removes
+   files Nexus itself created; the currently-installed model and anything the
+   user might still need are never touched.
+2. **Prune the knowledge log.** Reminders/facts/preferences are an
+   append-only event log shared between devices, and nothing used to trim it.
+   See the retention policy below.
+3. **Model integrity self-check.** If a local model is installed, Nexus does a
+   lightweight verification that the file is present, complete (the size the
+   tier expects), and loadable given the current free RAM — reusing the same
+   loadability check the loader runs. This catches a partially-failed download
+   or silent truncation before you hit it mid-task. It deliberately does *not*
+   load the multi-GB model and run inference in the background.
+4. **Report, don't hide.** Every run is logged (timestamp, what was cleaned,
+   how much space was freed, any issues) and a **"Last maintenance" summary**
+   is shown in **Settings**, with a "Run now" button.
+
+**Knowledge-log retention policy (v1):**
+
+- **Facts and preferences:** keep every event newer than **90 days**, plus the
+  **most recent 200** of that type regardless of age — whichever keeps more.
+- **Reminders:** a reminder that **has not fired yet is never pruned**,
+  however old its event is. Fired reminders are kept for **30 days**, plus the
+  **most recent 20** — so fired reminders age out more aggressively than
+  facts/preferences.
+- **Preferences:** the **latest event per key is always kept**, because it
+  defines current behaviour (e.g. "notify only on this device").
+
+**Pruning and sync idempotency.** Merging is by event id, so a pruned local
+copy must not be treated as "new" again if a peer that hasn't pruned yet syncs
+it back (which would resurrect an old reminder and re-schedule it). Each
+pruned id is recorded in a bounded **tombstone set** (kept 180 days — longer
+than any retention window, so a slow peer can't resurrect an event); `merge`
+ignores ids in that set exactly like ids already present. Pruning is local
+only: it never changes what a peer stores, and it never changes *when* a
+still-pending reminder fires.
+
+**Scheduling (platform difference, stated plainly):**
+
+- **Android** uses a periodic **WorkManager** task constrained to **idle,
+  charging, and battery-not-low**, so maintenance never competes with active
+  use or drains the battery. WorkManager and Doze decide the exact moment and
+  may defer it — Nexus does not fight the OS.
+- **Linux** has **no persistent background service**. The honest equivalent is
+  opportunistic: on app startup, if the last run was more than ~24 hours ago,
+  maintenance runs then. It does not run while the app is closed, and Nexus
+  doesn't pretend otherwise.
+
+---
+
 ## Get the Android app from your phone (no computer needed)
 
 Every push to `main` is built and tested automatically by GitHub Actions, so
@@ -355,7 +413,6 @@ flutter run -d android
 ## What's NOT built yet (intentionally)
 
 - Distributed task-splitting across devices
-- Sleep-cycle features
 - A larger, even-smarter local model (the current tiers go up to 7B; bigger
   models or GPU-accelerated inference can be added later)
 - (These come later, once they're designed properly.)
