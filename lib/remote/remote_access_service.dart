@@ -8,6 +8,7 @@ import '../settings/settings_service.dart';
 import 'nat_keepalive.dart';
 import 'port_mapper.dart';
 import 'stun_client.dart';
+import 'udp_receive_server.dart';
 
 /// How a paired device was last reached (or not).
 enum DeviceLinkStatus { unknown, local, remote, remoteUdp, unreachable }
@@ -34,6 +35,7 @@ class RemoteAccessService extends ChangeNotifier {
   final StunClient _stun = StunClient();
   final PortMapper _mapper = PortMapper();
   final NatKeepAlive _keepAlive = NatKeepAlive();
+  final UdpReceiveServer _udpServer = UdpReceiveServer();
 
   bool _enabled = false;
   String? _publicAddress; // "ip:port" when a TCP mapping is open
@@ -61,7 +63,9 @@ class RemoteAccessService extends ChangeNotifier {
       _statuses[deviceId] ?? DeviceLinkStatus.unknown;
 
   Future<void> init() async {
-    _enabled = await _settings.getAllowInternetAccess();
+    // Just read the stored setting; don't set [_enabled] here so that
+    // the caller can use [setEnabled] to activate everything (including
+    // NAT keep-alive) without hitting the early-return guard.
   }
 
   /// Toggles the feature. When turned on it immediately opens a mapping; when
@@ -71,7 +75,11 @@ class RemoteAccessService extends ChangeNotifier {
     if (_enabled == value) return;
     _enabled = value;
     if (value) {
-      await refreshPublicAddress();
+      try {
+        await refreshPublicAddress();
+      } catch (_) {
+        // UPnP failure is expected; keep-alive still works.
+      }
       _refreshTimer?.cancel();
       _refreshTimer = Timer.periodic(const Duration(minutes: 5), (_) {
         refreshPublicAddress();
@@ -80,7 +88,8 @@ class RemoteAccessService extends ChangeNotifier {
       // probes so home routers don't evict the mapping. When the endpoint
       // changes, share it with paired devices.
       _keepAlive.onEndpointChanged = (ep) => _shareUdpEndpoint(ep);
-      _keepAlive.start();
+      await _keepAlive.start();
+      _udpServer.start(_keepAlive);
     } else {
       _refreshTimer?.cancel();
       _refreshTimer = null;

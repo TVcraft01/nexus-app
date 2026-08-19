@@ -7,6 +7,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../ai/reminder_service.dart';
 import '../models/paired_device.dart';
+import '../pairing/pairing_service.dart';
+import '../remote/remote_access_service.dart';
 import '../tasks/task_crypto.dart';
 import 'knowledge_store.dart';
 
@@ -86,8 +88,12 @@ class SyncService {
 
       // Reply with everything the sender is missing (events after its cursor).
       final outbound = store.eventsSince(since);
+      // Piggyback this device's public UDP endpoint so the peer can
+      // hole-punch later when not on the same LAN.
+      final udp = RemoteAccessService.instance.publicUdpEndpoint;
       final responsePayload = utf8.encode(jsonEncode({
         'events': [for (final e in outbound) e.toJson()],
+        if (udp != null) 'publicUdpEndpoint': udp.hostPort,
       }));
       return Response.ok(
         await encryptTaskPayload(responsePayload, keyBytes),
@@ -142,6 +148,14 @@ class SyncService {
         ];
         final newlyAdded = await store.merge(incoming);
         await _scheduleIncomingReminders(newlyAdded);
+
+        // The peer may have piggybacked its public UDP endpoint so we can
+        // hole-punch later when not on the same LAN.
+        final peerUdp = json['publicUdpEndpoint'] as String?;
+        if (peerUdp != null && peerUdp.isNotEmpty) {
+          await PairingService()
+              .updateDevicePublicUdpEndpoint(device.deviceId, peerUdp);
+        }
 
         // Advance this peer's cursor so next time we only send what's new.
         await _setCursor(device.deviceId, DateTime.now().toUtc());

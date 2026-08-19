@@ -204,15 +204,18 @@ class TransferService {
     // the opt-in remote-connect path.
     if (request.method == 'GET' && request.url.path == 'ping') {
       final public = RemoteAccessService.instance.publicAddress;
+      final udp = RemoteAccessService.instance.publicUdpEndpoint;
       return Response.ok(
         jsonEncode({
           'deviceId': await _thisDeviceId(),
           'deviceName': await _thisDeviceName(),
           if (public != null) 'publicAddress': public,
+          if (udp != null) 'publicUdpEndpoint': udp.hostPort,
         }),
         headers: {
           'content-type': 'application/json',
           if (public != null) 'x-nexus-public': public,
+          if (udp != null) 'x-nexus-udp-endpoint': udp.hostPort,
         },
       );
     }
@@ -343,11 +346,13 @@ class TransferService {
     unawaited(SyncService.instance.syncAll());
 
     final myPublic = RemoteAccessService.instance.publicAddress;
+    final myUdp = RemoteAccessService.instance.publicUdpEndpoint;
     return Response.ok(
       jsonEncode({'status': 'ok', 'savedPath': dest.path}),
       headers: {
         'content-type': 'application/json',
         if (myPublic != null) 'x-nexus-public': myPublic,
+        if (myUdp != null) 'x-nexus-udp-endpoint': myUdp.hostPort,
       },
     );
   }
@@ -466,6 +471,13 @@ class TransferService {
       final peerPublic = response.headers.value('x-nexus-public');
       if (peerPublic != null && peerPublic.isNotEmpty) {
         await _pairing.updateDevicePublicAddress(target.deviceId, peerPublic);
+      }
+
+      // The peer may also share its public UDP endpoint (for hole-punching)
+      // when answering over TCP. Remember it so the next attempt can try UDP.
+      final peerUdp = response.headers.value('x-nexus-udp-endpoint');
+      if (peerUdp != null && peerUdp.isNotEmpty) {
+        await _pairing.updateDevicePublicUdpEndpoint(target.deviceId, peerUdp);
       }
 
       if (response.statusCode != 200) {
@@ -794,7 +806,13 @@ class TransferService {
           .join()
           .timeout(const Duration(milliseconds: 400));
       final json = jsonDecode(body) as Map<String, dynamic>;
-      return json['deviceId'] == deviceId ? ip : null;
+      if (json['deviceId'] != deviceId) return null;
+      // If the peer shared its public UDP endpoint during ping, remember it.
+      final peerUdp = json['publicUdpEndpoint'] as String?;
+      if (peerUdp != null && peerUdp.isNotEmpty) {
+        await _pairing.updateDevicePublicUdpEndpoint(deviceId, peerUdp);
+      }
+      return ip;
     } catch (_) {
       return null;
     } finally {

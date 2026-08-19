@@ -13,6 +13,7 @@ import 'devbridge/dev_bridge_screen.dart';
 import 'devbridge/dev_bridge_service.dart';
 import 'maintenance/maintenance_scheduler.dart';
 import 'models/paired_device.dart';
+import 'settings/settings_service.dart';
 import 'pairing/pairing_service.dart';
 import 'remote/remote_access_service.dart';
 import 'pairing/qr_pairing_screen.dart';
@@ -122,8 +123,21 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   /// if enabled, opens a public port mapping + shares our public endpoint.
   Future<void> _initRemoteAccess() async {
     final remote = RemoteAccessService.instance;
-    await remote.init();
-    await remote.refreshPublicAddress(receivePort: TransferService.receivePort);
+    final settings = SettingsService();
+    final wasEnabled = await settings.getAllowInternetAccess();
+    // ignore: avoid_print
+    print('[REMOTE] init: wasEnabled=$wasEnabled');
+    if (wasEnabled) {
+      try {
+        await remote.setEnabled(true);
+        // ignore: avoid_print
+        print('[REMOTE] setEnabled(true) completed');
+      } catch (e, st) {
+        // ignore: avoid_print
+        print('[REMOTE] setEnabled error: $e');
+        print('[REMOTE] stack: $st');
+      }
+    }
   }
 
   @override

@@ -23,37 +23,41 @@ import '../transfer/transfer_service.dart';
 /// The body is the same NEXUS1 + chunked AES-GCM format as the HTTP path.
 ///
 /// This only runs on the PC (the device being reached), not on the phone.
+///
+/// This class does NOT listen on the socket directly. Instead, it receives
+/// datagrams via [handleDatagram], called by [NatKeepAlive.onIncomingDatagram]
+/// — NatKeepAlive is the sole listener on the socket.
 class UdpReceiveServer {
   final PairingService _pairing = PairingService();
   final TransferService _transfer = TransferService();
   final Map<String, NexusDatagramChannel> _channels = {};
-  StreamSubscription<RawSocketEvent>? _socketSub;
   bool _running = false;
 
   /// Callback invoked when a file is successfully received over UDP.
   void Function(ReceivedFile file)? onFileReceived;
 
-  /// Starts listening for incoming SYN packets on the keep-alive socket
-  /// and completing handshakes.
+  /// Starts the server by registering with [keepAlive]'s packet callback.
   void start(NatKeepAlive keepAlive) {
     if (_running) return;
     _running = true;
+    keepAlive.onIncomingDatagram = handleDatagram;
+  }
 
-    final socket = keepAlive.socket;
+  /// Called by NatKeepAlive for every non-STUN datagram. Checks for SYN
+  /// packets and initiates the handshake.
+  void handleDatagram(Datagram dg) {
+    if (!NexusDatagramChannel.isSyn(dg.data)) return;
+
+    // ignore: avoid_print
+    print('[UDP-RECV] SYN from ${dg.address.address}:${dg.port}');
+
+    final socket = RemoteAccessService.instance.udpSocket;
     if (socket == null) return;
 
-    _socketSub = socket.listen((event) {
-      if (event != RawSocketEvent.read) return;
-      final datagram = socket.receive();
-      if (datagram == null) return;
+    final key = '${dg.address.address}:${dg.port}';
+    if (_channels.containsKey(key)) return;
 
-      if (!NexusDatagramChannel.isSyn(datagram.data)) return;
-
-      final key = '${datagram.address.address}:${datagram.port}';
-      if (_channels.containsKey(key)) return;
-
-      _acceptConnection(socket, datagram.address, datagram.port, key);
-    });
+    _acceptConnection(socket, dg.address, dg.port, key);
   }
 
   Future<void> _acceptConnection(
@@ -169,17 +173,6 @@ class UdpReceiveServer {
       SecretBox(cipherText, nonce: nonce, mac: Mac(mac)),
       secretKey: SecretKey(keyBytes),
     );
-  }
-
-  void stop() {
-    _running = false;
-    _socketSub?.cancel();
-    _socketSub = null;
-    for (final ch in _channels.values) {
-      ch.close();
-    }
-    _channels.clear();
+    // If decrypt succeeds, the key is correct.
   }
 }
-
-
