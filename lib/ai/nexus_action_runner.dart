@@ -10,6 +10,7 @@ import 'package:path_provider/path_provider.dart';
 
 import '../models/paired_device.dart';
 import '../sync/knowledge_store.dart';
+import 'action_registry.dart';
 import 'nexus_brain.dart';
 import 'reminder_service.dart';
 
@@ -56,6 +57,12 @@ class NexusActionRunner {
         _devicesProvider = devicesProvider ?? (() async => const []);
 
   Future<String> run(NexusAction action) async {
+    // Defense in depth: the brains already skip disabled actions, but refuse
+    // one here too so no code path can execute an action the user turned off.
+    if (action.command != NexusCommand.unknown &&
+        !ActionRegistry.instance.isEnabled(action.command)) {
+      return disabledActionReply(action.command);
+    }
     switch (action.command) {
       case NexusCommand.createFolder:
         return _createFolder(action.args['name'] as String? ?? 'New Folder');

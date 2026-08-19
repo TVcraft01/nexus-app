@@ -7,6 +7,7 @@ import '../remote/remote_access_service.dart';
 import '../sync/known_facts_screen.dart';
 import '../sync/knowledge_store.dart';
 import '../transfer/transfer_service.dart';
+import 'action_permissions_screen.dart';
 import 'settings_service.dart';
 
 /// The Settings tab: the internet/auto-update toggles, the paired-devices
@@ -143,6 +144,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const Divider(),
           _sectionHeader('Notifications'),
           _buildNotificationsSection(context),
+          const Divider(),
+          _sectionHeader('Actions & permissions'),
+          ListTile(
+            leading: const Icon(Icons.tune),
+            title: const Text('Nexus Permissions'),
+            subtitle: const Text(
+                'Turn individual actions on or off, and manage the system '
+                'permissions they use.'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute(
+                  builder: (_) => const ActionPermissionsScreen()),
+            ),
+          ),
           const Divider(),
           _sectionHeader('Paired devices'),
           if (widget.devices.isEmpty)

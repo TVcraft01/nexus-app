@@ -4,6 +4,7 @@ import 'dart:developer' as developer;
 import 'package:flutter/foundation.dart';
 import 'package:lib_llama_cpp/lib_llama_cpp.dart';
 
+import 'action_registry.dart';
 import 'keyword_brain.dart';
 import 'model_tiers.dart';
 import 'nexus_brain.dart';
@@ -153,10 +154,12 @@ class LlmBrain implements NexusBrain {
       return _fallback.interpret(input);
     }
 
+    // Only offer commands the user hasn't turned off, so a disabled action
+    // can't even be suggested by the model.
+    final commandList = enabledActionTokens().join('|');
     final system = 'You are Nexus, a private on-device assistant. '
         'Respond with ONLY one JSON object and nothing else, with this shape: '
-        '{"command":"createFolder|openWifiSettings|setReminder|setPreference|'
-        'setAlarm|setTimer|playDeezerFlow|callContact|openEmail|chat",'
+        '{"command":"$commandList",'
         '"args":{},"reply":"short reply to the user (max 2 sentences)". '
         'Rules: for createFolder put the folder name in args.name. '
         'For setReminder do NOT compute a date. Extract a RELATIVE time: for '
@@ -191,6 +194,12 @@ class LlmBrain implements NexusBrain {
       // Prefer the model's structured action when it produced one.
       final parsed = _parseAction(raw);
       if (parsed != null && parsed.command != NexusCommand.unknown) {
+        if (!ActionRegistry.instance.isEnabled(parsed.command)) {
+          return NexusAction(
+            command: NexusCommand.unknown,
+            reply: disabledActionReply(parsed.command),
+          );
+        }
         return parsed;
       }
 

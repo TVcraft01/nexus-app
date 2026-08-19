@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import 'ai/action_registry.dart';
 import 'ai/model_service.dart';
 import 'ai/model_tiers.dart';
 import 'ai/model_ui.dart';
@@ -77,6 +78,7 @@ class _MainScreenState extends State<MainScreen> {
       devicesProvider: () => _pairingService.getPairedDevices(),
     );
     KnowledgeStore.instance.init();
+    ActionRegistry.instance.init();
     _receivedSub = _transferService.receivedFiles.listen(_onFileReceived);
     _historySub =
         _transferService.transferHistory.listen((_) => _loadTransferHistory());

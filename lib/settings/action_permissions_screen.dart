@@ -1,0 +1,179 @@
+import 'dart:io';
+
+import 'package:android_intent_plus/android_intent.dart';
+import 'package:flutter/material.dart';
+
+import '../ai/action_registry.dart';
+
+/// This app's applicationId (see android/app/build.gradle.kts). Used to deep
+/// link to the app's page in the system settings, where permissions are
+/// actually revocable.
+const String _applicationId = 'com.example.nexus_app';
+
+/// A system permission Nexus uses. Shown so the user can open this app's
+/// system settings page and revoke it there — Android does not let an app
+/// revoke its own permissions, so these are honest deep links rather than
+/// pretend revocation.
+class _AppPermission {
+  final IconData icon;
+  final String label;
+  final String purpose;
+
+  const _AppPermission({
+    required this.icon,
+    required this.label,
+    required this.purpose,
+  });
+}
+
+const List<_AppPermission> _appPermissions = [
+  _AppPermission(
+    icon: Icons.qr_code_scanner,
+    label: 'Camera',
+    purpose: 'Scanning pairing QR codes',
+  ),
+  _AppPermission(
+    icon: Icons.mic_none,
+    label: 'Microphone',
+    purpose: 'Offline voice commands',
+  ),
+  _AppPermission(
+    icon: Icons.contacts_outlined,
+    label: 'Contacts',
+    purpose: 'Resolving a spoken name to a phone number',
+  ),
+];
+
+/// The "Actions & permissions" screen: one switch per action, plus honest
+/// pointers to the system settings for the permissions the actions rely on.
+class ActionPermissionsScreen extends StatelessWidget {
+  const ActionPermissionsScreen({super.key});
+
+  Future<void> _openAppSettings() async {
+    const intent = AndroidIntent(
+      action: 'android.settings.APPLICATION_DETAILS_SETTINGS',
+      data: 'package:$_applicationId',
+    );
+    try {
+      await intent.launch();
+    } catch (_) {
+      // Best-effort: the toggle itself has already taken effect regardless.
+    }
+  }
+
+  Future<void> _offerRevoke(
+      BuildContext context, NexusActionDefinition def) async {
+    final permission = (def.runtimePermission ?? '')
+        .replaceAll('android.permission.', '')
+        .replaceAll('_', ' ')
+        .trim()
+        .toLowerCase();
+    if (!context.mounted) return;
+    final openSettings = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('"${def.title}" turned off'),
+        content: Text(
+          'Nexus will no longer recognize "${def.examples.first}" until you '
+          'turn it back on.\n\n'
+          'Android doesn\'t let apps revoke their own permissions, so if you '
+          'also want to remove ${permission.isEmpty ? 'the permission it uses' : '$permission access'}, '
+          'you can do that in the system settings. This step is optional.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Done'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Open settings'),
+          ),
+        ],
+      ),
+    );
+    if (openSettings == true) {
+      await _openAppSettings();
+    }
+  }
+
+  Future<void> _onToggle(
+      BuildContext context, NexusActionDefinition def, bool value) async {
+    await ActionRegistry.instance.setEnabled(def.command, value);
+    if (!value && def.runtimePermission != null && Platform.isAndroid) {
+      if (!context.mounted) return;
+      await _offerRevoke(context, def);
+    }
+  }
+
+  Widget _sectionHeader(BuildContext context, String title) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
+      child: Text(
+        title.toUpperCase(),
+        style: Theme.of(context).textTheme.labelMedium?.copyWith(
+              color: Theme.of(context).colorScheme.primary,
+              letterSpacing: 1.2,
+            ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Actions & permissions')),
+      body: ListenableBuilder(
+        listenable: ActionRegistry.instance,
+        builder: (context, _) {
+          final registry = ActionRegistry.instance;
+          return ListView(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                child: Text(
+                  'Choose what Nexus is allowed to do. A turned-off action is '
+                  'no longer recognized by command mode or the local model, '
+                  'and disappears from "What can I say?".',
+                  style: Theme.of(context).textTheme.bodyMedium,
+                ),
+              ),
+              for (final def in nexusActions)
+                SwitchListTile(
+                  secondary: Icon(def.icon),
+                  title: Text(def.title),
+                  subtitle: Text(def.description),
+                  value: registry.isEnabled(def.command),
+                  onChanged: (v) => _onToggle(context, def, v),
+                ),
+              const Divider(),
+              _sectionHeader(context, 'System permissions'),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                child: Text(
+                  'Nexus can\'t revoke its own permissions on Android. Each '
+                  'entry opens this app\'s system settings page, where you '
+                  'turn the permission off yourself.',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ),
+              for (final p in _appPermissions)
+                ListTile(
+                  leading: Icon(p.icon),
+                  title: Text(p.label),
+                  subtitle: Text(p.purpose),
+                  trailing: Platform.isAndroid
+                      ? TextButton(
+                          onPressed: _openAppSettings,
+                          child: const Text('Manage'),
+                        )
+                      : null,
+                ),
+              const SizedBox(height: 24),
+            ],
+          );
+        },
+      ),
+    );
+  }
+}

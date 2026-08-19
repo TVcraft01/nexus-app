@@ -1,3 +1,4 @@
+import 'action_registry.dart';
 import 'nexus_brain.dart';
 import 'spoken_time.dart';
 
@@ -7,6 +8,21 @@ import 'spoken_time.dart';
 class KeywordBrain implements NexusBrain {
   @override
   Future<NexusAction> interpret(String input) async {
+    final action = await _interpretUnchecked(input);
+    if (action.command != NexusCommand.unknown &&
+        !ActionRegistry.instance.isEnabled(action.command)) {
+      return NexusAction(
+        command: NexusCommand.unknown,
+        reply: disabledActionReply(action.command),
+      );
+    }
+    return action;
+  }
+
+  /// The raw pattern matching, before the action-registry gate above. Kept
+  /// separate so a turned-off action is skipped rather than matched and then
+  /// executed anyway.
+  Future<NexusAction> _interpretUnchecked(String input) async {
     final t = input.toLowerCase().trim();
 
     if (_hasAny(t, const ['folder', 'directory'])) {
