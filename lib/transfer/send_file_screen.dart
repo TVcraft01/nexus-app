@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
@@ -34,9 +36,13 @@ class _SendFileScreenState extends State<SendFileScreen> {
     String? path = file.path;
     // On some Android devices the picker hands back a content:// URI instead
     // of a real file path, so copy it somewhere local we can stream from.
+    // The copy lives in a dedicated folder so background maintenance can
+    // safely remove abandoned copies later (never while a send is in flight).
     if (path == null) {
       final dir = await getTemporaryDirectory();
-      path = p.join(dir.path, file.name);
+      final tmp = Directory(p.join(dir.path, 'nexus_send_tmp'));
+      await tmp.create(recursive: true);
+      path = p.join(tmp.path, file.name);
       await file.xFile.saveTo(path);
     }
     final size = await file.length();

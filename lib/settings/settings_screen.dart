@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../ai/model_service.dart';
 import '../ai/model_ui.dart';
 import '../devbridge/dev_bridge_service.dart';
+import '../maintenance/maintenance_service.dart';
 import '../models/paired_device.dart';
 import '../remote/remote_access_service.dart';
 import '../sync/known_facts_screen.dart';
@@ -40,6 +41,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool? _allowDevTasks;
   String _devTaskCommand = SettingsService.defaultDevTaskCommand;
   String _devTaskCwd = '';
+  MaintenanceRunReport? _lastMaintenance;
+  bool _maintenanceRunning = false;
 
   @override
   void initState() {
@@ -53,6 +56,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final devTasks = await _settings.getAllowDevTasks();
     final command = await _settings.getDevTaskCommand();
     final cwd = await _settings.getDevTaskCwd();
+    final maintenance = await MaintenanceService.instance.lastReport();
     if (mounted) {
       setState(() {
         _allowInternet = allow;
@@ -60,6 +64,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _allowDevTasks = devTasks;
         _devTaskCommand = command;
         _devTaskCwd = cwd;
+        _lastMaintenance = maintenance;
       });
     }
   }
@@ -87,6 +92,31 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (confirmed == true) {
       await widget.onForgetDevice(device.deviceId);
     }
+  }
+
+  Future<void> _runMaintenance() async {
+    setState(() => _maintenanceRunning = true);
+    await MaintenanceService.instance.run();
+    final report = await MaintenanceService.instance.lastReport();
+    if (mounted) {
+      setState(() {
+        _maintenanceRunning = false;
+        _lastMaintenance = report;
+      });
+    }
+  }
+
+  String _relativeTime(DateTime time) {
+    final diff = DateTime.now().difference(time);
+    if (diff.inSeconds < 60) return 'just now';
+    if (diff.inMinutes < 60) {
+      return '${diff.inMinutes} minute${diff.inMinutes == 1 ? '' : 's'} ago';
+    }
+    if (diff.inHours < 24) {
+      return '${diff.inHours} hour${diff.inHours == 1 ? '' : 's'} ago';
+    }
+    if (diff.inDays == 1) return 'yesterday';
+    return '${diff.inDays} days ago';
   }
 
   String _humanSize(int bytes) {
@@ -171,6 +201,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   builder: (_) => const ActionPermissionsScreen()),
             ),
           ),
+          const Divider(),
+          _sectionHeader('Maintenance'),
+          _buildMaintenanceSection(context),
           const Divider(),
           _sectionHeader('Paired devices'),
           if (widget.devices.isEmpty)
@@ -366,6 +399,75 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ),
     );
     if (result != null) await onSave(result.trim());
+  }
+
+  /// "Last maintenance" — the visible record of what the idle-time
+  /// housekeeping actually did. Honest copy: no dreaming, just cleanup.
+  Widget _buildMaintenanceSection(BuildContext context) {
+    if (_maintenanceRunning) {
+      return const ListTile(
+        leading: SizedBox(
+          width: 24,
+          height: 24,
+          child: CircularProgressIndicator(strokeWidth: 2),
+        ),
+        title: Text('Running maintenance…'),
+        subtitle: Text(
+          'Removing stale files, pruning old shared-knowledge events, and '
+          'checking the local model.',
+        ),
+      );
+    }
+
+    final report = _lastMaintenance;
+    if (report == null) {
+      return ListTile(
+        leading: const Icon(Icons.cleaning_services_outlined),
+        title: const Text('No maintenance run yet'),
+        subtitle: const Text(
+          'While the device is idle, Nexus removes stale dev-bridge files and '
+          'interrupted downloads, prunes old shared-knowledge events, and '
+          'checks the local model. On Android this runs in the background '
+          '(idle + charging); on Linux it runs at startup when due.',
+        ),
+        isThreeLine: true,
+        trailing: TextButton(
+          onPressed: _runMaintenance,
+          child: const Text('Run now'),
+        ),
+      );
+    }
+
+    final parts = <String>[
+      if (report.filesRemoved > 0)
+        'removed ${report.filesRemoved} stale '
+            'file${report.filesRemoved == 1 ? '' : 's'} '
+            '(${_humanSize(report.bytesFreed)} freed)'
+      else
+        'no stale files to remove',
+      'pruned ${report.knowledgeEventsPruned} knowledge '
+          'event${report.knowledgeEventsPruned == 1 ? '' : 's'}',
+      report.modelVerdictLabel,
+    ];
+
+    return ListTile(
+      leading: Icon(
+        report.hasIssues
+            ? Icons.warning_amber_outlined
+            : Icons.cleaning_services_outlined,
+        color: report.hasIssues ? Colors.orange : null,
+      ),
+      title: Text('Last maintenance: ${_relativeTime(report.ranAt)}'),
+      subtitle: Text(
+        '${parts.join(' · ')}'
+        '${report.hasIssues ? '\n${report.issues.join('\n')}' : ''}',
+      ),
+      isThreeLine: report.hasIssues,
+      trailing: TextButton(
+        onPressed: _runMaintenance,
+        child: const Text('Run now'),
+      ),
+    );
   }
 
   Widget _sectionHeader(String title) {

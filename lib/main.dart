@@ -11,6 +11,7 @@ import 'ai/vosk_ffi.dart';
 import 'ai/vosk_service.dart';
 import 'devbridge/dev_bridge_screen.dart';
 import 'devbridge/dev_bridge_service.dart';
+import 'maintenance/maintenance_scheduler.dart';
 import 'models/paired_device.dart';
 import 'pairing/pairing_service.dart';
 import 'remote/remote_access_service.dart';
@@ -55,7 +56,7 @@ class MainScreen extends StatefulWidget {
   State<MainScreen> createState() => _MainScreenState();
 }
 
-class _MainScreenState extends State<MainScreen> {
+class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   final _pairingService = PairingService();
   final _transferService = TransferService();
   final _modelService = ModelService();
@@ -101,6 +102,20 @@ class _MainScreenState extends State<MainScreen> {
       WidgetsBinding.instance.addPostFrameCallback((_) => _maybeOfferModel());
     });
     _initRemoteAccess();
+    // Background maintenance: Android registers a constrained periodic task
+    // (idle + charging); Linux runs it opportunistically right now if due.
+    startMaintenanceScheduling();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed) return;
+    // A background maintenance run (Android WorkManager) prunes the knowledge
+    // log in a SEPARATE isolate. Reload from prefs on resume so this isolate's
+    // in-memory cache matches the persisted, pruned state instead of
+    // resurrecting pruned events on the next write.
+    unawaited(KnowledgeStore.instance.init());
   }
 
   /// Brings the opt-in remote-access service up to date: reads the toggle and,
@@ -113,6 +128,7 @@ class _MainScreenState extends State<MainScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _receivedSub?.cancel();
     _historySub?.cancel();
     _transferService.stop();

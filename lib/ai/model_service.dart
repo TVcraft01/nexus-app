@@ -11,6 +11,26 @@ import 'model_tiers.dart';
 /// Where the downloaded model is in its lifecycle.
 enum ModelState { none, downloading, ready, error }
 
+/// What the lightweight integrity self-check found for the installed model.
+enum ModelIntegrityVerdict {
+  /// No model is installed, so there is nothing to check.
+  none,
+
+  /// The file is present, complete (right size), and the device can load it.
+  ok,
+
+  /// The persisted model file is gone (e.g. deleted outside the app).
+  missing,
+
+  /// The file is smaller than the tier expects — a partially-failed download
+  /// or silent truncation.
+  incomplete,
+
+  /// The file looks intact but the device no longer has the free RAM the tier
+  /// needs, so it would refuse to load right now.
+  lowMemory,
+}
+
 /// Thrown when the user cancels an in-progress download.
 class ModelDownloadCancelled implements Exception {
   const ModelDownloadCancelled();
@@ -108,6 +128,39 @@ class ModelService extends ChangeNotifier {
   /// Measures the device and picks the best tier, or null if nothing fits.
   Future<ModelTier?> recommendTier() async =>
       pickTierFor(await detectCapability());
+
+  /// Lightweight verification that the installed model would still load, for
+  /// the background maintenance self-check.
+  ///
+  /// It reuses the same facts the loader relies on ([canLoadTierWithFreeRam]
+  /// — the exact check [LlmBrain.ensureLoaded] runs right before loading) plus
+  /// a file-size sanity check, so it catches a partially-failed download or
+  /// silent truncation BEFORE the user hits it mid-task. It deliberately does
+  /// NOT load the multi-GB model into memory and run an inference: doing that
+  /// from a background maintenance task would compete with the very resources
+  /// this check is meant to protect.
+  Future<ModelIntegrityVerdict> verifyIntegrity({int? freeRamBytesOverride}) async {
+    final path = _modelPath;
+    final tier = _tier;
+    if (path == null || tier == null) return ModelIntegrityVerdict.none;
+
+    final file = File(path);
+    if (!file.existsSync()) return ModelIntegrityVerdict.missing;
+
+    int size;
+    try {
+      size = await file.length();
+    } catch (_) {
+      return ModelIntegrityVerdict.missing;
+    }
+    if (size < tier.sizeBytes) return ModelIntegrityVerdict.incomplete;
+
+    final freeRam = freeRamBytesOverride ?? await readFreeRamBytes();
+    if (!canLoadTierWithFreeRam(tier, freeRam)) {
+      return ModelIntegrityVerdict.lowMemory;
+    }
+    return ModelIntegrityVerdict.ok;
+  }
 
   /// Cancels the in-progress download, if any.
   void cancelDownload() {
