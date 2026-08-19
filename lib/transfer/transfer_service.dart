@@ -11,6 +11,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:shelf/shelf.dart';
 import 'package:shelf/shelf_io.dart' as shelf_io;
 
+import '../devbridge/dev_bridge_service.dart';
 import '../models/paired_device.dart';
 import '../pairing/pairing_service.dart';
 import '../remote/remote_access_service.dart';
@@ -259,6 +260,24 @@ class TransferService {
         return Response.forbidden('device not paired');
       }
       return SyncService.instance.handleSyncRequest(request, device);
+    }
+
+    // Remote dev task (the dev bridge): a paired device submits a prompt to be
+    // run by this PC's configured task command. Auth + encryption identical to
+    // /task and /sync; the DevBridgeService adds the safety gate (toggle off
+    // by default, one task at a time). The sender piggybacks its current
+    // public endpoint so we can push the build artifact back to it.
+    if (request.method == 'POST' && request.url.path == 'devtask') {
+      final key = request.headers['x-nexus-key'] ?? '';
+      final device = await _deviceForPairingKey(key);
+      if (device == null) {
+        return Response.forbidden('device not paired');
+      }
+      final senderPublic = request.headers['x-nexus-public'];
+      if (senderPublic != null && senderPublic.isNotEmpty) {
+        await _pairing.updateDevicePublicAddress(device.deviceId, senderPublic);
+      }
+      return DevBridgeService.instance.handleDevTask(request, device);
     }
 
     if (request.method != 'POST' || request.url.path != 'receive') {

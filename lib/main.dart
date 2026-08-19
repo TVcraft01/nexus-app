@@ -9,6 +9,8 @@ import 'ai/model_ui.dart';
 import 'ai/talk_screen.dart';
 import 'ai/vosk_ffi.dart';
 import 'ai/vosk_service.dart';
+import 'devbridge/dev_bridge_screen.dart';
+import 'devbridge/dev_bridge_service.dart';
 import 'models/paired_device.dart';
 import 'pairing/pairing_service.dart';
 import 'remote/remote_access_service.dart';
@@ -79,6 +81,12 @@ class _MainScreenState extends State<MainScreen> {
     );
     KnowledgeStore.instance.init();
     ActionRegistry.instance.init();
+    // The dev bridge runs user-configured commands and sends any produced
+    // build artifact back over the same encrypted transfer path as files.
+    DevBridgeService.instance.init(
+      pusher: (target, path) =>
+          _transferService.sendFile(target: target, filePath: path),
+    );
     _receivedSub = _transferService.receivedFiles.listen(_onFileReceived);
     _historySub =
         _transferService.transferHistory.listen((_) => _loadTransferHistory());
@@ -258,6 +266,17 @@ class _MainScreenState extends State<MainScreen> {
     );
   }
 
+  void _openDevTask() {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => DevBridgeScreen(
+          transferService: _transferService,
+          devices: _devices,
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -269,6 +288,7 @@ class _MainScreenState extends State<MainScreen> {
             onDevicesChanged: _loadDevices,
             onDeviceTap: _openSendFile,
             onBatchTask: _openBatchTask,
+            onDevTask: _openDevTask,
           ),
           FilesScreen(
             records: _transferHistory,
@@ -320,6 +340,7 @@ class HomeScreen extends StatefulWidget {
   final VoidCallback onDevicesChanged;
   final void Function(PairedDevice device) onDeviceTap;
   final VoidCallback onBatchTask;
+  final VoidCallback onDevTask;
 
   const HomeScreen({
     super.key,
@@ -327,6 +348,7 @@ class HomeScreen extends StatefulWidget {
     required this.onDevicesChanged,
     required this.onDeviceTap,
     required this.onBatchTask,
+    required this.onDevTask,
   });
 
   @override
@@ -376,6 +398,11 @@ class _HomeScreenState extends State<HomeScreen> {
       appBar: AppBar(
         title: const Text('Nexus'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.terminal),
+            tooltip: 'Remote dev task',
+            onPressed: widget.onDevTask,
+          ),
           IconButton(
             icon: const Icon(Icons.summarize_outlined),
             tooltip: 'Batch task',

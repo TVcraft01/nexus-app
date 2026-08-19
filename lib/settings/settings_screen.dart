@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../ai/model_service.dart';
 import '../ai/model_ui.dart';
+import '../devbridge/dev_bridge_service.dart';
 import '../models/paired_device.dart';
 import '../remote/remote_access_service.dart';
 import '../sync/known_facts_screen.dart';
@@ -36,6 +37,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final _settings = SettingsService();
   bool? _allowInternet;
   bool? _autoUpdate;
+  bool? _allowDevTasks;
+  String _devTaskCommand = SettingsService.defaultDevTaskCommand;
+  String _devTaskCwd = '';
 
   @override
   void initState() {
@@ -46,10 +50,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _load() async {
     final allow = await _settings.getAllowInternetAccess();
     final auto = await _settings.getAutoUpdate();
+    final devTasks = await _settings.getAllowDevTasks();
+    final command = await _settings.getDevTaskCommand();
+    final cwd = await _settings.getDevTaskCwd();
     if (mounted) {
       setState(() {
         _allowInternet = allow;
         _autoUpdate = auto;
+        _allowDevTasks = devTasks;
+        _devTaskCommand = command;
+        _devTaskCwd = cwd;
       });
     }
   }
@@ -129,6 +139,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const Divider(),
           _sectionHeader('Remote access'),
           _buildRemoteSection(context),
+          const Divider(),
+          _sectionHeader('Developer bridge'),
+          _buildDevBridgeSection(context),
           const Divider(),
           _sectionHeader('Shared knowledge'),
           ListTile(
@@ -210,6 +223,149 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ],
       ),
     );
+  }
+
+  /// "Remote dev tasks" toggle (default OFF, with an explicit confirmation
+  /// before it can be switched on) plus the task command / working directory
+  /// editors that control what a paired device may actually run here.
+  Widget _buildDevBridgeSection(BuildContext context) {
+    final devBridgeBusy = DevBridgeService.instance.busy;
+    return Column(
+      children: [
+        SwitchListTile(
+          title: const Text('Allow remote dev tasks'),
+          subtitle: const Text(
+              'OFF. When ON, a paired device can send a prompt that runs the '
+              'configured task command on THIS device (code execution + '
+              'builds). Separate from "Allow internet access".'),
+          secondary: const Icon(Icons.developer_mode),
+          value: _allowDevTasks ?? false,
+          onChanged: _allowDevTasks == null || devBridgeBusy
+              ? null
+              : (v) async {
+                  if (v) {
+                    // Deliberate confirmation: this hands a paired device the
+                    // ability to run code on this machine.
+                    final confirmed = await showDialog<bool>(
+                      context: context,
+                      builder: (context) => AlertDialog(
+                        title: const Text('Allow remote dev tasks?'),
+                        content: const Text(
+                            'This lets a paired device send a prompt that runs '
+                            'the task command on this device — it can execute '
+                            'code and run builds here. Only turn this on for '
+                            'devices you fully trust.\n\nYou can change it '
+                            'back any time.'),
+                        actions: [
+                          TextButton(
+                            onPressed: () => Navigator.pop(context, false),
+                            child: const Text('Cancel'),
+                          ),
+                          FilledButton(
+                            onPressed: () => Navigator.pop(context, true),
+                            child: const Text('Enable'),
+                          ),
+                        ],
+                      ),
+                    );
+                    if (confirmed != true) return;
+                  }
+                  await _settings.setAllowDevTasks(v);
+                  if (mounted) setState(() => _allowDevTasks = v);
+                },
+        ),
+        if (devBridgeBusy)
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+            child: Text(
+              'A dev task is running right now; the toggle is locked until '
+              'it finishes.',
+              style: TextStyle(fontSize: 12, color: Colors.orange),
+            ),
+          ),
+        ListTile(
+          leading: const Icon(Icons.terminal),
+          title: const Text('Dev task command'),
+          subtitle: const Text(
+              'The command a paired device\'s prompt runs. {prompt} and '
+              '{promptFile} are substituted. Defaults to a placeholder that '
+              'explains how to configure it.'),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () => _editDevTaskSetting(
+            title: 'Dev task command',
+            help: 'Shell command run for each dev task. {prompt} is replaced '
+                'by the prompt text and {promptFile} by the path of a file '
+                'containing it (prefer {promptFile} to avoid quoting issues).',
+            initial: _devTaskCommand,
+            onSave: (v) async {
+              await _settings.setDevTaskCommand(v);
+              if (mounted) setState(() => _devTaskCommand = v);
+            },
+          ),
+        ),
+        ListTile(
+          leading: const Icon(Icons.folder_outlined),
+          title: const Text('Dev task working directory'),
+          subtitle: Text(
+              _devTaskCwd.trim().isEmpty
+                  ? 'Defaults to the app\'s current directory (often where the '
+                      'app was launched from).'
+                  : _devTaskCwd),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () => _editDevTaskSetting(
+            title: 'Working directory',
+            help: 'Directory the task command runs in, e.g. the repo path.',
+            initial: _devTaskCwd,
+            onSave: (v) async {
+              await _settings.setDevTaskCwd(v);
+              if (mounted) setState(() => _devTaskCwd = v);
+            },
+          ),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _editDevTaskSetting({
+    required String title,
+    required String help,
+    required String initial,
+    required Future<void> Function(String value) onSave,
+  }) async {
+    final controller = TextEditingController(text: initial);
+    final result = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(title),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(help, style: const TextStyle(fontSize: 13)),
+            const SizedBox(height: 12),
+            TextField(
+              controller: controller,
+              maxLines: title.contains('command') ? 4 : 1,
+              decoration: const InputDecoration(
+                border: OutlineInputBorder(),
+                isDense: true,
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, controller.text),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    if (result != null) await onSave(result.trim());
   }
 
   Widget _sectionHeader(String title) {

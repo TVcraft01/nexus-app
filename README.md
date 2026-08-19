@@ -92,6 +92,69 @@ now — you'll need to be on the same network" rather than hanging. There is **n
 relay fallback yet** (a relay would have to be your own self-hosted server — a
 separate future decision).
 
+### Remote dev tasks (the dev bridge)
+
+Nexus can hand a text prompt from your **phone** to a **paired PC** over the
+same encrypted channel as file transfer, have the PC run a coding task, and
+send the **report + any build artifact (e.g. the APK)** back to the phone —
+still encrypted, still direct device-to-device.
+
+Safety model (this is the most powerful feature in the app — it can run code
+on the PC):
+
+- **"Allow remote dev tasks" is OFF by default** and separate from "Allow
+  internet access". Turning it on requires an explicit confirmation dialog.
+  Requests are rejected with a clear message while it's off.
+- Only **already-paired devices** can submit tasks — the prompt travels
+  AES-GCM-encrypted with the pairing-key-derived key, exactly like file
+  transfer, and the request is authenticated by the pairing secret.
+- **One task at a time.** A second request while one is running is rejected
+  with a clear message (no queueing).
+- The prompt is fed to a **user-configured command** (editable in Settings ->
+  Developer bridge), never executed directly. A task that runs longer than
+  **30 minutes** is killed.
+- Port forwarding / reachability follows the same rules as remote access
+  (see above): LAN first, then the opt-in remote path. The artifact is sent
+  back over the *existing* encrypted `/receive` file-transfer path.
+
+**The Freebuff limitation (why the command is configurable):** Freebuff's CLI
+(currently) has **no clean non-interactive mode**. Its `--help` exposes only
+`login`, `--continue`, and `--cwd`; piping a prompt via stdin is ignored (the
+binary opens its interactive TUI, falling back to `/dev/tty` when stdin isn't a
+TTY); and there is no `-p`/`--prompt`/`--batch`/`--headless` flag. So Nexus
+won't scrape a live terminal session — instead the dev bridge runs whatever
+command you configure, which is exactly where a future headless Freebuff (or
+any other agent CLI) plugs in.
+
+To set it up on the PC: open **Settings -> Developer bridge**, turn on
+"Allow remote dev tasks", set the **working directory** to the repo path, and
+set the **task command**, e.g.:
+
+```sh
+bash /home/you/nexus-app/devtask.sh "{prompt}"
+```
+
+`{prompt}` is replaced with the prompt text (quote it yourself) and
+`{promptFile}` with the path of a file containing the prompt (prefer this to
+avoid shell-quoting issues). A minimal `devtask.sh` that writes the prompt to
+a file for a headless agent to pick up:
+
+```sh
+#!/bin/sh
+set -e
+cd "$(dirname "$0")"
+cp "$2" /tmp/nexus_pending_prompt.txt 2>/dev/null || printf '%s' "$1" > /tmp/nexus_pending_prompt.txt
+# Invoke your agent headlessly here (once Freebuff supports it):
+#   freebuff --cwd "$PWD" --run "$1"
+echo "Prompt received and staged for the dev task."
+```
+
+(Adjust paths; the default command is a harmless placeholder that explains
+this.) When the task finishes, Nexus looks for a build artifact under
+`build/` (newest APK, or the Linux release bundle packed into a `.tar.gz`)
+and pushes it to your phone, where the Remote dev task screen shows a
+"Open / Install" button.
+
 ### Talk to Nexus (the offline assistant)
 
 The **Talk** tab accepts typed or **spoken** commands and answers aloud using
