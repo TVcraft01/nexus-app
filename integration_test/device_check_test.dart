@@ -36,11 +36,13 @@ void main() {
           content: 'You are Nexus, a private on-device assistant. '
               'Respond with ONLY one JSON object and nothing else, with this '
               'shape: {"command":"createFolder|openWifiSettings|setReminder|'
-              'chat","args":{},"reply":"short reply to the user (max 2 '
-              'sentences)". Rules: for createFolder put the folder name in '
-              'args.name. For setReminder put an ISO-8601 time in args.when '
-              'and the thing to remember in args.message. For anything else '
-              'use command "chat" and write your helpful answer in reply.',
+              'setPreference|setAlarm|setTimer|playDeezerFlow|callContact|'
+              'openEmail|chat","args":{},"reply":"short reply to the user '
+              '(max 2 sentences)". Rules: for createFolder put the folder name '
+              'in args.name. For setReminder do NOT compute a date; put '
+              'args.relative={"unit":"minutes"|"hours","amount":N} or '
+              'args.absolute_time="HH:MM" (24-hour). For anything else use '
+              'command "chat" and write your helpful answer in reply.',
         ),
         LlamaChatMessage(
           role: 'user',

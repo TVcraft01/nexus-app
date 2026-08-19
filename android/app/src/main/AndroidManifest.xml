@@ -9,6 +9,9 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO"/>
     <!-- Needed so scheduled reminders survive a device reboot. -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
+    <!-- Asked for just-in-time (not at install) when "call <name>" needs to
+         resolve a contact name to a number. -->
+    <uses-permission android:name="android.permission.READ_CONTACTS"/>
 
     <application
         android:label="Nexus"
@@ -71,6 +74,28 @@
         <!-- Lets the app talk to the device's text-to-speech engine (Android 11+). -->
         <intent>
             <action android:name="android.intent.action.TTS_SERVICE"/>
+        </intent>
+        <!-- Resolve the native Clock app for alarm/timer handoff (Android 11+). -->
+        <intent>
+            <action android:name="android.intent.action.SET_ALARM"/>
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.SET_TIMER"/>
+        </intent>
+        <!-- Resolve the dialer for the call action. -->
+        <intent>
+            <action android:name="android.intent.action.DIAL"/>
+            <data android:scheme="tel"/>
+        </intent>
+        <!-- Resolve the default email app via its standard category. -->
+        <intent>
+            <action android:name="android.intent.action.MAIN"/>
+            <category android:name="android.intent.category.APP_EMAIL"/>
+        </intent>
+        <!-- Detect Deezer via its deep-link scheme. -->
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <data android:scheme="deezer"/>
         </intent>
     </queries>
 </manifest>

@@ -4,6 +4,11 @@ enum NexusCommand {
   openWifiSettings,
   setReminder,
   setPreference,
+  setAlarm,
+  setTimer,
+  playDeezerFlow,
+  callContact,
+  openEmail,
   unknown,
 }
 

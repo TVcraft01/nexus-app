@@ -36,7 +36,10 @@ class KeywordBrain implements NexusBrain {
       );
     }
 
-    if (_hasAny(t, const ['remind', 'reminder', 'alarm', 'notify'])) {
+    // Reminder comes before the alarm/call/email branches so phrases like
+    // "remind me to call Sam at 7 pm" or "remind me to check email" still mean
+    // "set a reminder", not the new actions.
+    if (_hasAny(t, const ['remind', 'reminder', 'notify'])) {
       final when = _parseReminderTime(input);
       if (when == null) {
         return NexusAction(
@@ -48,8 +51,77 @@ class KeywordBrain implements NexusBrain {
       }
       return NexusAction(
         command: NexusCommand.setReminder,
-        reply: 'Reminder set for ${_formatTime(when)}.',
+        reply: 'Reminder set for ${_formatClock(when.hour, when.minute)}.',
         args: {'when': when, 'message': _extractReminderMessage(input)},
+      );
+    }
+
+    // "set an alarm" is its own action (handed to the native Clock app),
+    // distinct from "remind me ..." reminders.
+    if (_hasWord(t, 'alarm')) {
+      final when = _parseAlarmClock(input);
+      if (when == null) {
+        return NexusAction(
+          command: NexusCommand.setAlarm,
+          reply: 'What time should I set the alarm for? Try '
+              '"set an alarm for 7 am".',
+          args: const {'needsTime': true},
+        );
+      }
+      return NexusAction(
+        command: NexusCommand.setAlarm,
+        reply: 'Opening your Clock app to set an alarm for '
+            '${_formatClock(when.hour, when.minute)}…',
+        args: {'hour': when.hour, 'minute': when.minute},
+      );
+    }
+
+    if (_hasAny(t, const ['timer', 'countdown'])) {
+      final seconds = _parseTimerSeconds(input);
+      if (seconds == null) {
+        return NexusAction(
+          command: NexusCommand.setTimer,
+          reply: 'How long should I set the timer for? Try '
+              '"set a timer for 10 minutes".',
+          args: const {'needsTime': true},
+        );
+      }
+      return NexusAction(
+        command: NexusCommand.setTimer,
+        reply: 'Opening your Clock app to set a ${_formatDuration(seconds)} '
+            'timer…',
+        args: {'seconds': seconds},
+      );
+    }
+
+    if (t.contains('flow') && (t.contains('deezer') || t.contains('play'))) {
+      return const NexusAction(
+        command: NexusCommand.playDeezerFlow,
+        reply: 'Opening Deezer Flow…',
+      );
+    }
+
+    if (_hasWord(t, 'call') || _hasWord(t, 'dial')) {
+      final target = _extractCallTarget(input);
+      if (target == null || target.isEmpty) {
+        return NexusAction(
+          command: NexusCommand.callContact,
+          reply: 'Who should I call? Say a name or a number — for example '
+              '"call Sam".',
+          args: const {'needsTarget': true},
+        );
+      }
+      return NexusAction(
+        command: NexusCommand.callContact,
+        reply: 'Opening your dialer for $target…',
+        args: {'target': target},
+      );
+    }
+
+    if (_hasAny(t, const ['email', 'gmail', 'inbox'])) {
+      return const NexusAction(
+        command: NexusCommand.openEmail,
+        reply: 'Opening your email app…',
       );
     }
 
@@ -61,6 +133,11 @@ class KeywordBrain implements NexusBrain {
   }
 
   bool _hasAny(String text, List<String> words) => words.any(text.contains);
+
+  /// Word-boundary match, used where a substring match would be risky
+  /// ("call" inside "recall", for example).
+  bool _hasWord(String text, String word) =>
+      RegExp('\\b${RegExp.escape(word)}\\b').hasMatch(text);
 
   /// Recognizes "notify/remind me (only/always) on my `device`" and
   /// "notifications only on my `device`" as a notify-device preference.
@@ -108,7 +185,8 @@ class KeywordBrain implements NexusBrain {
   }
 
   /// Understands "in 30 minutes" and "at 7 pm" / "at 19:30". Returns null so
-  /// the caller can ask for a time when none is given.
+  /// the caller can ask for a time when none is given. The real timestamp is
+  /// computed in Dart (see lib/ai/spoken_time.dart), never by a model.
   DateTime? _parseReminderTime(String input) {
     final t = input.toLowerCase();
 
@@ -135,10 +213,59 @@ class KeywordBrain implements NexusBrain {
     return null;
   }
 
-  String _formatTime(DateTime when) {
-    final hour12 = when.hour % 12 == 0 ? 12 : when.hour % 12;
-    final minute = when.minute.toString().padLeft(2, '0');
-    final meridiem = when.hour >= 12 ? 'pm' : 'am';
-    return '$hour12:$minute $meridiem';
+  /// Extracts a clock time ("7", "7:30", "7 am", "19:00") from an alarm
+  /// phrase. Returns null so the caller can ask for a time when none is given.
+  ClockTime? _parseAlarmClock(String input) {
+    final t = input.toLowerCase();
+    final match =
+        RegExp(r'\b\d{1,2}(?::\d{2})?\s*(?:am|pm)?\b').firstMatch(t);
+    if (match == null) return null;
+    return parseClockTime(match.group(0)!);
+  }
+
+  /// Extracts a timer length ("10 minutes", "30 seconds", "2 hours") in
+  /// seconds. Returns null so the caller can ask for a length when none given.
+  int? _parseTimerSeconds(String input) {
+    final t = input.toLowerCase();
+    final match = RegExp(r'\b(\d+)\s*(seconds?|secs?|minutes?|mins?|hours?|hrs?)')
+        .firstMatch(t);
+    if (match == null) return null;
+    final n = int.tryParse(match.group(1)!);
+    if (n == null) return null;
+    return durationFromParts(amount: n, unit: match.group(2)!)?.inSeconds;
+  }
+
+  /// Pulls the name or number to call out of "call Sam" / "dial 911". Stops
+  /// at a trailing time clause ("at 7 pm") so it doesn't leak into the target.
+  String? _extractCallTarget(String input) {
+    var s = input.replaceFirst(
+      RegExp(r'^\W*(?:call|dial)\b\s*(?:me\s+)?', caseSensitive: false),
+      '',
+    );
+    s = s.replaceFirst(
+      RegExp(r'\s+(?:at|in|on|for)\s+.+$', caseSensitive: false),
+      '',
+    );
+    return s.trim();
+  }
+
+  String _formatClock(int hour, int minute) {
+    final hour12 = hour % 12 == 0 ? 12 : hour % 12;
+    final meridiem = hour >= 12 ? 'pm' : 'am';
+    final mm = minute.toString().padLeft(2, '0');
+    return '$hour12:$mm $meridiem';
+  }
+
+  String _formatDuration(int seconds) {
+    if (seconds < 60) return '$seconds second${seconds == 1 ? '' : 's'}';
+    final hours = seconds ~/ 3600;
+    final minutes = (seconds % 3600) ~/ 60;
+    if (seconds % 3600 == 0) return '$hours hour${hours == 1 ? '' : 's'}';
+    if (seconds % 60 == 0) return '$minutes minute${minutes == 1 ? '' : 's'}';
+    if (hours > 0) {
+      return '$hours hour${hours == 1 ? '' : 's'} '
+          '$minutes minute${minutes == 1 ? '' : 's'}';
+    }
+    return '$seconds seconds';
   }
 }

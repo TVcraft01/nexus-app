@@ -155,7 +155,8 @@ class LlmBrain implements NexusBrain {
 
     final system = 'You are Nexus, a private on-device assistant. '
         'Respond with ONLY one JSON object and nothing else, with this shape: '
-        '{"command":"createFolder|openWifiSettings|setReminder|setPreference|chat",'
+        '{"command":"createFolder|openWifiSettings|setReminder|setPreference|'
+        'setAlarm|setTimer|playDeezerFlow|callContact|openEmail|chat",'
         '"args":{},"reply":"short reply to the user (max 2 sentences)". '
         'Rules: for createFolder put the folder name in args.name. '
         'For setReminder do NOT compute a date. Extract a RELATIVE time: for '
@@ -163,8 +164,11 @@ class LlmBrain implements NexusBrain {
         '"minutes" or "hours"); for "at 7pm" put args.absolute_time="19:00" '
         '(24-hour HH:MM). Put the thing to remember in args.message. '
         'For setPreference put args.key="notify_device" and args.deviceRef as one of '
-        'phone, pc, laptop, computer, desktop, or tablet. For anything else '
-        'use command "chat" and write your helpful answer in reply.';
+        'phone, pc, laptop, computer, desktop, or tablet. '
+        'For setAlarm put args.time="HH:MM" in 24-hour form (e.g. "07:00" for 7am). '
+        'For setTimer put args.duration={"unit":"minutes"|"seconds"|"hours","amount":N}. '
+        'For callContact put args.target with the name or number to call. '
+        'For anything else use command "chat" and write your helpful answer in reply.';
 
     try {
       final completion = await _client!.chat.completions.create(
@@ -330,6 +334,72 @@ class LlmBrain implements NexusBrain {
             'key': (args['key'] as String?) ?? 'notify_device',
             'deviceRef': deviceRef,
           },
+        );
+      case 'setalarm': {
+        final time = parseClockTime((args['time'] as String?) ?? '');
+        if (time == null) {
+          return NexusAction(
+            command: NexusCommand.setAlarm,
+            reply: 'What time should I set the alarm for? Try '
+                '"set an alarm for 7 am".',
+            args: const {'needsTime': true},
+          );
+        }
+        return NexusAction(
+          command: NexusCommand.setAlarm,
+          reply: reply.isEmpty ? 'Opening your Clock app…' : reply,
+          args: {'hour': time.hour, 'minute': time.minute},
+        );
+      }
+      case 'settimer': {
+        final duration = args['duration'];
+        var seconds = int.tryParse('${args['seconds'] ?? ''}');
+        if (duration is Map && seconds == null) {
+          final amount = int.tryParse('${duration['amount'] ?? ''}');
+          final unit = (duration['unit'] as String?) ?? '';
+          if (amount != null) {
+            seconds = durationFromParts(amount: amount, unit: unit)?.inSeconds;
+          }
+        }
+        if (seconds == null || seconds <= 0) {
+          return NexusAction(
+            command: NexusCommand.setTimer,
+            reply: 'How long should I set the timer for? Try '
+                '"set a timer for 10 minutes".',
+            args: const {'needsTime': true},
+          );
+        }
+        return NexusAction(
+          command: NexusCommand.setTimer,
+          reply: reply.isEmpty ? 'Opening your Clock app…' : reply,
+          args: {'seconds': seconds},
+        );
+      }
+      case 'playdeezerflow':
+        return NexusAction(
+          command: NexusCommand.playDeezerFlow,
+          reply: reply.isEmpty ? 'Opening Deezer Flow…' : reply,
+        );
+      case 'callcontact': {
+        final target = (args['target'] as String?)?.trim() ?? '';
+        if (target.isEmpty) {
+          return NexusAction(
+            command: NexusCommand.callContact,
+            reply: 'Who should I call? Say a name or a number — for example '
+                '"call Sam".',
+            args: const {'needsTarget': true},
+          );
+        }
+        return NexusAction(
+          command: NexusCommand.callContact,
+          reply: reply.isEmpty ? 'Opening your dialer…' : reply,
+          args: {'target': target},
+        );
+      }
+      case 'openemail':
+        return NexusAction(
+          command: NexusCommand.openEmail,
+          reply: reply.isEmpty ? 'Opening your email app…' : reply,
         );
       default:
         return NexusAction(

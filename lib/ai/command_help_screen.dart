@@ -54,8 +54,62 @@ const List<CommandHelpEntry> commandHelpEntries = [
     examples: [
       'remind me in 30 minutes',
       'remind me to call Sam at 7 pm',
-      'set an alarm at 8 am',
       'remind me to stretch in 2 hours',
+    ],
+  ),
+  CommandHelpEntry(
+    title: 'Set an alarm',
+    icon: Icons.alarm_on_outlined,
+    description: 'Opens your Clock app with an alarm pre-filled. On Android '
+        'only — other platforms say so honestly instead of doing nothing.',
+    examples: [
+      'set an alarm for 7 am',
+      'set an alarm at 6:30 pm',
+      'set an alarm for 19:00',
+    ],
+  ),
+  CommandHelpEntry(
+    title: 'Set a timer',
+    icon: Icons.timer_outlined,
+    description: 'Opens your Clock app with a countdown timer pre-filled. '
+        'Android only, like alarms.',
+    examples: [
+      'set a timer for 10 minutes',
+      'set a timer for 30 seconds',
+      'set a timer for 2 hours',
+    ],
+  ),
+  CommandHelpEntry(
+    title: 'Play Deezer Flow',
+    icon: Icons.music_note_outlined,
+    description: 'Opens Deezer and starts Flow. Works on Android and Linux when '
+        'Deezer is installed; otherwise it says so.',
+    examples: [
+      'play Deezer Flow',
+      'play my Flow on Deezer',
+    ],
+  ),
+  CommandHelpEntry(
+    title: 'Call someone',
+    icon: Icons.call_outlined,
+    description: 'Opens your dialer pre-filled with the number — you tap call '
+        'yourself, so Nexus never places a call. Names are looked up in your '
+        'contacts (asking permission the first time); otherwise say the number.',
+    examples: [
+      'call Sam',
+      'call 555-1234',
+      'dial 911',
+    ],
+  ),
+  CommandHelpEntry(
+    title: 'Open email',
+    icon: Icons.email_outlined,
+    description: 'Opens your default email app (or Gmail). It never reads or '
+        'connects to your mail — it only opens the app for you.',
+    examples: [
+      'check email',
+      'open Gmail',
+      'open my inbox',
     ],
   ),
   CommandHelpEntry(

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:android_intent_plus/android_intent.dart';
+import 'package:flutter_contacts/flutter_contacts.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -45,6 +46,16 @@ class NexusActionRunner {
         return _setReminder(action);
       case NexusCommand.setPreference:
         return _setPreference(action);
+      case NexusCommand.setAlarm:
+        return _setAlarm(action);
+      case NexusCommand.setTimer:
+        return _setTimer(action);
+      case NexusCommand.playDeezerFlow:
+        return _playDeezerFlow();
+      case NexusCommand.callContact:
+        return _callContact(action);
+      case NexusCommand.openEmail:
+        return _openEmail();
       case NexusCommand.unknown:
         return action.reply;
     }
@@ -215,5 +226,203 @@ class NexusActionRunner {
       // The reminder is already scheduled locally; sync logging is best-effort.
     }
     return action.reply;
+  }
+
+  /// Hands an alarm to the native Clock app (Android only).
+  Future<String> _setAlarm(NexusAction action) async {
+    if (!Platform.isAndroid) {
+      return 'Alarms aren\'t available on this platform yet — on Android I\'d '
+          'hand this to your Clock app.';
+    }
+    final hour = action.args['hour'] as int?;
+    final minute = action.args['minute'] as int? ?? 0;
+    if (hour == null || hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+      return 'What time should I set the alarm for? Try '
+          '"set an alarm for 7 am".';
+    }
+    final intent = AndroidIntent(
+      action: 'android.intent.action.SET_ALARM',
+      arguments: {
+        'android.intent.extra.alarm.HOUR': hour,
+        'android.intent.extra.alarm.MINUTES': minute,
+      },
+    );
+    final resolvable = await intent.canResolveActivity();
+    if (resolvable != true) {
+      return 'I couldn\'t find a Clock app to set an alarm on this device.';
+    }
+    await intent.launch();
+    return action.reply;
+  }
+
+  /// Hands a timer to the native Clock app (Android only).
+  Future<String> _setTimer(NexusAction action) async {
+    if (!Platform.isAndroid) {
+      return 'Timers aren\'t available on this platform yet — on Android I\'d '
+          'hand this to your Clock app.';
+    }
+    final seconds = action.args['seconds'] as int?;
+    if (seconds == null || seconds <= 0) {
+      return 'How long should I set the timer for? Try '
+          '"set a timer for 10 minutes".';
+    }
+    final intent = AndroidIntent(
+      action: 'android.intent.action.SET_TIMER',
+      arguments: {
+        'android.intent.extra.alarm.LENGTH': seconds,
+      },
+    );
+    final resolvable = await intent.canResolveActivity();
+    if (resolvable != true) {
+      return 'I couldn\'t find a Clock app to set a timer on this device.';
+    }
+    await intent.launch();
+    return action.reply;
+  }
+
+  /// Opens Deezer at Flow via its deep link, on Android and Linux (when the
+  /// app is installed). Reports honestly when it isn't.
+  Future<String> _playDeezerFlow() async {
+    const deezerFlow = 'deezer://www.deezer.com/flow';
+
+    if (Platform.isAndroid) {
+      final intent = AndroidIntent(
+        action: 'android.intent.action.VIEW',
+        data: deezerFlow,
+      );
+      final resolvable = await intent.canResolveActivity();
+      if (resolvable != true) {
+        return 'Deezer isn\'t installed on this device.';
+      }
+      await intent.launch();
+      return 'Opening Deezer Flow…';
+    }
+
+    if (Platform.isLinux) {
+      try {
+        final process = await Process.start('xdg-open', [deezerFlow]);
+        unawaited(process.stdout.drain<void>());
+        unawaited(process.stderr.drain<void>());
+        final code = await process.exitCode;
+        if (code != 0) return 'Deezer isn\'t installed on this device.';
+        return 'Opening Deezer Flow…';
+      } catch (_) {
+        return 'Deezer isn\'t installed on this device.';
+      }
+    }
+
+    return 'Playing Deezer Flow isn\'t supported on this device yet.';
+  }
+
+  /// Opens the dialer pre-filled with a number (never places the call itself).
+  /// Names are resolved via contacts, requesting READ_CONTACTS just-in-time.
+  Future<String> _callContact(NexusAction action) async {
+    final target = (action.args['target'] as String? ?? '').trim();
+    if (target.isEmpty) return 'Who should I call? Say a name or a number.';
+    if (!Platform.isAndroid) {
+      return 'Calling isn\'t available on this platform yet — on Android I\'d '
+          'open the dialer for you (without placing the call myself).';
+    }
+
+    if (_looksLikePhoneNumber(target)) {
+      return _dial(target);
+    }
+
+    // Ask for contacts access only at the moment it's first needed.
+    try {
+      final status =
+          await FlutterContacts.permissions.request(PermissionType.read);
+      if (status != PermissionStatus.granted) {
+        return 'I need contacts access to look up "$target". Say the number '
+            'instead — for example "call 555 1234".';
+      }
+      final contacts = await FlutterContacts.getAll(
+        properties: const {ContactProperty.name, ContactProperty.phone},
+        filter: ContactFilter.name(target),
+        limit: 20,
+      );
+      final number = _bestMatchNumber(target, contacts);
+      if (number == null) {
+        return 'I couldn\'t find "$target" in your contacts. Say the number '
+            'instead.';
+      }
+      return await _dial(number);
+    } catch (_) {
+      return 'I couldn\'t read your contacts. Say the number instead — for '
+          'example "call 555 1234".';
+    }
+  }
+
+  Future<String> _dial(String number) async {
+    final clean = number.replaceAll(RegExp(r'\s+'), '');
+    final intent = AndroidIntent(
+      action: 'android.intent.action.DIAL',
+      data: 'tel:$clean',
+    );
+    final resolvable = await intent.canResolveActivity();
+    if (resolvable != true) {
+      return 'I couldn\'t find a dialer app on this device.';
+    }
+    await intent.launch();
+    return 'Opening your dialer for $number — tap call when you\'re ready.';
+  }
+
+  /// True when [target] is a phone number (digits plus the usual separators),
+  /// so it can be dialed directly without touching contacts.
+  bool _looksLikePhoneNumber(String target) {
+    final t = target.trim();
+    if (t.isEmpty) return false;
+    final digits = t.replaceAll(RegExp(r'[^0-9]'), '');
+    if (digits.isEmpty) return false;
+    return RegExp(r'^\+?[0-9\s().\-]+$').hasMatch(t);
+  }
+
+  /// Resolves [target] to a phone number without guessing: an exact display
+  /// name wins, a single unique partial match is accepted, anything ambiguous
+  /// or unmatched returns null.
+  String? _bestMatchNumber(String target, List<Contact> contacts) {
+    final t = target.trim().toLowerCase();
+    Contact? exactWithPhone;
+    final partialWithPhone = <Contact>[];
+    for (final c in contacts) {
+      final name = (c.displayName ?? '').trim().toLowerCase();
+      if (name.isEmpty || c.phones.isEmpty) continue;
+      if (name == t) {
+        exactWithPhone ??= c;
+      } else if (name.contains(t) || t.contains(name)) {
+        partialWithPhone.add(c);
+      }
+    }
+    if (exactWithPhone != null) return exactWithPhone.phones.first.number;
+    if (partialWithPhone.length == 1) {
+      return partialWithPhone.first.phones.first.number;
+    }
+    return null;
+  }
+
+  /// Opens the default email app (falling back to Gmail). This only opens the
+  /// app — it never reads or connects to any account.
+  Future<String> _openEmail() async {
+    if (!Platform.isAndroid) {
+      return 'Opening email isn\'t available on this platform yet.';
+    }
+    const generic = AndroidIntent(
+      action: 'android.intent.action.MAIN',
+      category: 'android.intent.category.APP_EMAIL',
+    );
+    if (await generic.canResolveActivity() == true) {
+      await generic.launch();
+      return 'Opening your email app…';
+    }
+    const gmail = AndroidIntent(
+      action: 'android.intent.action.MAIN',
+      category: 'android.intent.category.APP_EMAIL',
+      package: 'com.google.android.gm',
+    );
+    if (await gmail.canResolveActivity() == true) {
+      await gmail.launch();
+      return 'Opening Gmail…';
+    }
+    return 'I couldn\'t find an email app on this device.';
   }
 }

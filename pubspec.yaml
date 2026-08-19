@@ -30,6 +30,7 @@ dependencies:
   archive: ^4.0.9
   ffi: ^2.2.0
   open_filex: ^4.4.0   # opens received files with the platform's default app
+  flutter_contacts: ^2.3.1  # resolves a spoken contact name to a phone number
 
 dev_dependencies:
   flutter_test:
