@@ -6,6 +6,7 @@ import 'llm_brain.dart';
 import 'model_service.dart';
 import 'nexus_action_runner.dart';
 import 'nexus_brain.dart';
+import 'message_kind.dart';
 import 'vosk_service.dart';
 import '../models/paired_device.dart';
 
@@ -35,7 +36,8 @@ class TalkScreen extends StatefulWidget {
 class _TalkScreenState extends State<TalkScreen> {
   late final NexusActionRunner _runner;
   final TextEditingController _controller = TextEditingController();
-  final List<({bool fromUser, String text})> _messages = [];
+  final List<({bool fromUser, String text, NexusMessageKind? kind})>
+      _messages = [];
   bool _busy = false;
 
   LlmBrain? _llmBrain;
@@ -75,20 +77,28 @@ class _TalkScreenState extends State<TalkScreen> {
 
     _controller.clear();
     setState(() {
-      _messages.add((fromUser: true, text: input));
+      _messages.add((fromUser: true, text: input, kind: null));
       _busy = true;
     });
 
     // If Nexus just asked "Which device?", the reply is the answer to that
     // question — don't run it through the brain as a fresh command.
     final clarification = await _runner.answerClarification(input);
-    final response = clarification ??
-        await _runner.run(await _brain.interpret(input));
+    late final String response;
+    late final NexusMessageKind? kind;
+    if (clarification != null) {
+      response = clarification;
+      kind = NexusMessageKind.action;
+    } else {
+      final action = await _brain.interpret(input);
+      kind = messageKindFor(action);
+      response = await _runner.run(action);
+    }
     await _runner.speak(response);
 
     if (!mounted) return;
     setState(() {
-      _messages.add((fromUser: false, text: response));
+      _messages.add((fromUser: false, text: response, kind: kind));
       _busy = false;
     });
   }
@@ -246,22 +256,37 @@ class _TalkScreenState extends State<TalkScreen> {
                     itemCount: _messages.length,
                     itemBuilder: (context, i) {
                       final message = _messages[i];
+                      final bubble = Container(
+                        margin: const EdgeInsets.symmetric(vertical: 4),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 14, vertical: 10),
+                        constraints: const BoxConstraints(maxWidth: 320),
+                        decoration: BoxDecoration(
+                          color: message.fromUser
+                              ? theme.colorScheme.primaryContainer
+                              : theme.colorScheme.surfaceContainerHighest,
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: Text(message.text),
+                      );
+
+                      if (message.fromUser || message.kind == null) {
+                        return Align(
+                          alignment: message.fromUser
+                              ? Alignment.centerRight
+                              : Alignment.centerLeft,
+                          child: bubble,
+                        );
+                      }
+
                       return Align(
-                        alignment: message.fromUser
-                            ? Alignment.centerRight
-                            : Alignment.centerLeft,
-                        child: Container(
-                          margin: const EdgeInsets.symmetric(vertical: 4),
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 14, vertical: 10),
-                          constraints: const BoxConstraints(maxWidth: 320),
-                          decoration: BoxDecoration(
-                            color: message.fromUser
-                                ? theme.colorScheme.primaryContainer
-                                : theme.colorScheme.surfaceContainerHighest,
-                            borderRadius: BorderRadius.circular(16),
-                          ),
-                          child: Text(message.text),
+                        alignment: Alignment.centerLeft,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            bubble,
+                            _KindLabel(kind: message.kind!),
+                          ],
                         ),
                       );
                     },
@@ -382,6 +407,49 @@ class _ModeBadge extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// A tiny tag under an assistant bubble distinguishing an executed action from
+/// a general conversational answer, so "done" vs "discussed" is never ambiguous.
+class _KindLabel extends StatelessWidget {
+  final NexusMessageKind kind;
+
+  const _KindLabel({required this.kind});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final IconData icon;
+    final String label;
+    final Color color;
+    if (kind == NexusMessageKind.action) {
+      icon = Icons.check_circle_outline;
+      label = 'Action';
+      color = theme.colorScheme.primary;
+    } else {
+      icon = Icons.psychology_outlined;
+      label = 'General response';
+      color = theme.colorScheme.tertiary;
+    }
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(4, 0, 4, 8),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 14, color: color),
+          const SizedBox(width: 4),
+          Text(
+            label,
+            style: theme.textTheme.labelSmall?.copyWith(
+              color: color,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
       ),
     );
   }

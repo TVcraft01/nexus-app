@@ -20,10 +20,17 @@ class NexusAction {
   final String reply;
   final Map<String, dynamic> args;
 
+  /// True when this is a free-form conversational answer (an LLM "chat"
+  /// response) rather than an executed action. The Talk screen uses this to
+  /// label replies "General response" vs "Action", so it is never ambiguous
+  /// whether something was actually done or only discussed.
+  final bool isGeneralResponse;
+
   const NexusAction({
     required this.command,
     required this.reply,
     this.args = const {},
+    this.isGeneralResponse = false,
   });
 }
 

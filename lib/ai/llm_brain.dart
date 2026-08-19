@@ -193,7 +193,7 @@ class LlmBrain implements NexusBrain {
       );
 
       // Prefer the model's structured action when it produced one.
-      final parsed = _parseAction(raw);
+      final parsed = parseAction(raw);
       if (parsed != null && parsed.command != NexusCommand.unknown) {
         if (!ActionRegistry.instance.isEnabled(parsed.command)) {
           return NexusAction(
@@ -223,6 +223,7 @@ class LlmBrain implements NexusBrain {
           NexusAction(
             command: NexusCommand.unknown,
             reply: _cleanReply(raw),
+            isGeneralResponse: true,
           );
     } catch (e) {
       // Model ran out of context or errored; degrade to command mode once.
@@ -273,7 +274,11 @@ class LlmBrain implements NexusBrain {
   }
 
   /// Tries to read a NexusAction out of the model's JSON reply.
-  NexusAction? _parseAction(String raw) {
+  ///
+  /// Exposed (rather than private) so tests can exercise the parsing and the
+  /// general-response flag without loading a model.
+  @visibleForTesting
+  NexusAction? parseAction(String raw) {
     final start = raw.indexOf('{');
     final end = raw.lastIndexOf('}');
     if (start < 0 || end <= start) return null;
@@ -335,6 +340,7 @@ class LlmBrain implements NexusBrain {
           return NexusAction(
             command: NexusCommand.unknown,
             reply: _cleanReply(reply.isEmpty ? raw : reply),
+            isGeneralResponse: true,
           );
         }
         return NexusAction(
@@ -431,6 +437,7 @@ class LlmBrain implements NexusBrain {
         return NexusAction(
           command: NexusCommand.unknown,
           reply: _cleanReply(reply.isEmpty ? raw : reply),
+          isGeneralResponse: true,
         );
     }
   }
