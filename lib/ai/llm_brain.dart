@@ -7,6 +7,7 @@ import 'package:lib_llama_cpp/lib_llama_cpp.dart';
 import 'keyword_brain.dart';
 import 'model_tiers.dart';
 import 'nexus_brain.dart';
+import 'spoken_time.dart';
 
 /// Visible marker appended to a summary whose input file had to be truncated
 /// to fit the worker's model context. A truncated-but-real summary is better
@@ -157,10 +158,12 @@ class LlmBrain implements NexusBrain {
         '{"command":"createFolder|openWifiSettings|setReminder|setPreference|chat",'
         '"args":{},"reply":"short reply to the user (max 2 sentences)". '
         'Rules: for createFolder put the folder name in args.name. '
-        'For setReminder put an ISO-8601 time in args.when and the thing to '
-        'remember in args.message. For setPreference put args.key="notify_device" '
-        'and args.deviceRef as one of phone, pc, laptop, computer, desktop, or '
-        'tablet (the device the user wants to be notified on). For anything else '
+        'For setReminder do NOT compute a date. Extract a RELATIVE time: for '
+        '"in 3 minutes" put args.relative={"unit":"minutes","amount":3} (unit is '
+        '"minutes" or "hours"); for "at 7pm" put args.absolute_time="19:00" '
+        '(24-hour HH:MM). Put the thing to remember in args.message. '
+        'For setPreference put args.key="notify_device" and args.deviceRef as one of '
+        'phone, pc, laptop, computer, desktop, or tablet. For anything else '
         'use command "chat" and write your helpful answer in reply.';
 
     try {
@@ -284,9 +287,21 @@ class LlmBrain implements NexusBrain {
           command: NexusCommand.openWifiSettings,
           reply: reply.isEmpty ? 'Opening Wi-Fi settings.' : reply,
         );
-      case 'setreminder':
-        final when = DateTime.tryParse((args['when'] as String?) ?? '');
-        if (when == null) {
+      case 'setreminder': {
+        final message = (args['message'] as String?) ?? 'Reminder';
+        final relative = args['relative'];
+        DateTime? when;
+        if (relative is Map) {
+          final amount = int.tryParse('${relative['amount'] ?? ''}');
+          final unit = (relative['unit'] as String?) ?? '';
+          if (amount != null) {
+            when = reminderTimeFromDuration(amount: amount, unit: unit);
+          }
+        } else if (args['absolute_time'] is String) {
+          when = reminderTimeFromClockString(args['absolute_time'] as String);
+        }
+        // Safety: never schedule a moment that isn't in the future.
+        if (when == null || !when.isAfter(DateTime.now())) {
           return NexusAction(
             command: NexusCommand.setReminder,
             reply: 'When should I remind you? Try "remind me at 7 pm".',
@@ -296,8 +311,9 @@ class LlmBrain implements NexusBrain {
         return NexusAction(
           command: NexusCommand.setReminder,
           reply: reply.isEmpty ? 'Reminder set.' : reply,
-          args: {'when': when, 'message': (args['message'] as String?) ?? 'Reminder'},
+          args: {'when': when, 'message': message},
         );
+      }
       case 'setpreference':
         final deviceRef =
             (args['deviceRef'] as String?)?.trim().toLowerCase() ?? '';

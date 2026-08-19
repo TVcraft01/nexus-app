@@ -199,6 +199,12 @@ class NexusActionRunner {
     if (action.args['needsTime'] == true) return action.reply;
     final when = action.args['when'] as DateTime;
     final message = action.args['message'] as String? ?? 'Reminder';
+    // Safety: never schedule (or log) a reminder whose computed time is
+    // already in the past — ask for a fresh time instead.
+    if (!when.isAfter(DateTime.now())) {
+      return 'That time is already in the past — when should I remind you? '
+          'Try "remind me in 30 minutes" or "remind me at 7 pm".';
+    }
     await _reminders.scheduleReminder(when, message);
     // Record it in the knowledge log so paired devices also learn about (and
     // schedule) this reminder when they next sync. UTC keeps the absolute

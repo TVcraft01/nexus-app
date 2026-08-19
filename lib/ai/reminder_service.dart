@@ -47,6 +47,9 @@ class ReminderService {
   }
 
   Future<void> scheduleReminder(DateTime when, String message) async {
+    // Safety net: never schedule a reminder whose computed time is already in
+    // the past (defends against a bad clock handoff reaching this layer).
+    if (!when.isAfter(DateTime.now())) return;
     // Respect the learned "which device notifies" preference. The reminder
     // still lands in the shared log on this device; it just doesn't fire a
     // local notification here if the user asked to be notified elsewhere.

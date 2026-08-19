@@ -1,4 +1,5 @@
 import 'nexus_brain.dart';
+import 'spoken_time.dart';
 
 /// The guaranteed-minimum offline brain: a small keyword parser that maps a
 /// fixed set of phrases to actions, similar to how a simple voice assistant
@@ -116,11 +117,7 @@ class KeywordBrain implements NexusBrain {
     if (inMatch != null) {
       final n = int.tryParse(inMatch.group(1)!);
       if (n == null) return null;
-      final unit = inMatch.group(2)!;
-      final duration = unit.startsWith('h')
-          ? Duration(hours: n)
-          : Duration(minutes: n);
-      return DateTime.now().add(duration);
+      return reminderTimeFromDuration(amount: n, unit: inMatch.group(2)!);
     }
 
     final atMatch =
@@ -132,12 +129,7 @@ class KeywordBrain implements NexusBrain {
       final meridiem = atMatch.group(3);
       if (meridiem == 'pm' && hour < 12) hour += 12;
       if (meridiem == 'am' && hour == 12) hour = 0;
-      if (hour > 23 || minute > 59) return null;
-
-      final now = DateTime.now();
-      var when = DateTime(now.year, now.month, now.day, hour, minute);
-      if (when.isBefore(now)) when = when.add(const Duration(days: 1));
-      return when;
+      return reminderTimeFromClock(hour: hour, minute: minute);
     }
 
     return null;
