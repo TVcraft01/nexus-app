@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:android_intent_plus/android_intent.dart';
+import 'package:flutter/services.dart' show PlatformException;
 import 'package:flutter_contacts/flutter_contacts.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:path/path.dart' as p;
@@ -11,6 +12,24 @@ import '../models/paired_device.dart';
 import '../sync/knowledge_store.dart';
 import 'nexus_brain.dart';
 import 'reminder_service.dart';
+
+/// Turns an exception from an external intent launch into a short,
+/// user-facing reason. Exposed as a function (rather than inlined) so the
+/// formatting is unit-testable: every intent launch wraps itself in try/catch
+/// and surfaces this instead of letting the error escape and strand the Talk
+/// screen's send button on its spinner.
+String describeLaunchFailure(Object error) {
+  if (error is PlatformException) {
+    final message = error.message?.trim();
+    if (message != null && message.isNotEmpty) {
+      return message.length <= 200 ? message : '${message.substring(0, 200)}…';
+    }
+    final code = error.code.trim();
+    if (code.isNotEmpty) return code;
+  }
+  final text = error.toString().trim();
+  return text.isEmpty ? 'the system refused the request' : text;
+}
 
 /// Carries out the commands the [NexusBrain] decided on, and speaks the
 /// resulting reply aloud (text is always shown regardless).
@@ -148,6 +167,19 @@ class NexusActionRunner {
     }
   }
 
+  /// Launches [intent] on the user's behalf. Returns null on success or a
+  /// short user-facing reason on failure. Centralizes the try/catch so no
+  /// action can hang when an external app refuses the intent (e.g. a missing
+  /// permission or no matching activity).
+  Future<String?> _launchIntent(AndroidIntent intent) async {
+    try {
+      await intent.launch();
+      return null;
+    } catch (e) {
+      return describeLaunchFailure(e);
+    }
+  }
+
   Future<String> _createFolder(String name) async {
     final dir = await getApplicationDocumentsDirectory();
     final parent = Directory(p.join(dir.path, 'Nexus'));
@@ -176,7 +208,10 @@ class NexusActionRunner {
   Future<String> _openWifiSettings() async {
     if (Platform.isAndroid) {
       const intent = AndroidIntent(action: 'android.settings.WIFI_SETTINGS');
-      await intent.launch();
+      final failure = await _launchIntent(intent);
+      if (failure != null) {
+        return 'I couldn\'t open Wi-Fi settings — $failure.';
+      }
       return 'Opening Wi-Fi settings…';
     }
 
@@ -251,7 +286,8 @@ class NexusActionRunner {
     if (resolvable != true) {
       return 'I couldn\'t find a Clock app to set an alarm on this device.';
     }
-    await intent.launch();
+    final failure = await _launchIntent(intent);
+    if (failure != null) return 'I couldn\'t set the alarm — $failure.';
     return action.reply;
   }
 
@@ -276,7 +312,8 @@ class NexusActionRunner {
     if (resolvable != true) {
       return 'I couldn\'t find a Clock app to set a timer on this device.';
     }
-    await intent.launch();
+    final failure = await _launchIntent(intent);
+    if (failure != null) return 'I couldn\'t set the timer — $failure.';
     return action.reply;
   }
 
@@ -294,7 +331,8 @@ class NexusActionRunner {
       if (resolvable != true) {
         return 'Deezer isn\'t installed on this device.';
       }
-      await intent.launch();
+      final failure = await _launchIntent(intent);
+      if (failure != null) return 'I couldn\'t open Deezer — $failure.';
       return 'Opening Deezer Flow…';
     }
 
@@ -363,7 +401,8 @@ class NexusActionRunner {
     if (resolvable != true) {
       return 'I couldn\'t find a dialer app on this device.';
     }
-    await intent.launch();
+    final failure = await _launchIntent(intent);
+    if (failure != null) return 'I couldn\'t open your dialer — $failure.';
     return 'Opening your dialer for $number — tap call when you\'re ready.';
   }
 
@@ -411,7 +450,10 @@ class NexusActionRunner {
       category: 'android.intent.category.APP_EMAIL',
     );
     if (await generic.canResolveActivity() == true) {
-      await generic.launch();
+      final failure = await _launchIntent(generic);
+      if (failure != null) {
+        return 'I couldn\'t open your email app — $failure.';
+      }
       return 'Opening your email app…';
     }
     const gmail = AndroidIntent(
@@ -420,7 +462,8 @@ class NexusActionRunner {
       package: 'com.google.android.gm',
     );
     if (await gmail.canResolveActivity() == true) {
-      await gmail.launch();
+      final failure = await _launchIntent(gmail);
+      if (failure != null) return 'I couldn\'t open Gmail — $failure.';
       return 'Opening Gmail…';
     }
     return 'I couldn\'t find an email app on this device.';

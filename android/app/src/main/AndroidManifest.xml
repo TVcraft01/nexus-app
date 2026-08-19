@@ -12,6 +12,11 @@
     <!-- Asked for just-in-time (not at install) when "call <name>" needs to
          resolve a contact name to a number. -->
     <uses-permission android:name="android.permission.READ_CONTACTS"/>
+    <!-- Needed to hand an alarm/timer to the native Clock app via
+         AlarmClock.ACTION_SET_ALARM / ACTION_SET_TIMER. This is a normal
+         protection-level permission: a manifest declaration is enough, no
+         runtime prompt. -->
+    <uses-permission android:name="com.android.alarm.permission.SET_ALARM"/>
 
     <application
         android:label="Nexus"
@@ -92,10 +97,10 @@
             <action android:name="android.intent.action.MAIN"/>
             <category android:name="android.intent.category.APP_EMAIL"/>
         </intent>
-        <!-- Detect Deezer via its deep-link scheme. -->
-        <intent>
-            <action android:name="android.intent.action.VIEW"/>
-            <data android:scheme="deezer"/>
-        </intent>
+        <!-- Detect Deezer via its package. Its deep-link filter requires a
+             host (www.deezer.com, preprod.deezer.com, orange.deezer.com), so a
+             scheme-only query doesn't match it; naming the package is robust
+             across all of those hosts. -->
+        <package android:name="deezer.android.app"/>
     </queries>
 </manifest>
