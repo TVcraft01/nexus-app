@@ -82,6 +82,8 @@ class NexusActionRunner {
         return _callContact(action);
       case NexusCommand.openEmail:
         return _openEmail();
+      case NexusCommand.navigate:
+        return _navigate(action);
       case NexusCommand.unknown:
         return action.reply;
     }
@@ -474,5 +476,49 @@ class NexusActionRunner {
       return 'Opening Gmail…';
     }
     return 'I couldn\'t find an email app on this device.';
+  }
+
+  /// Hands navigation to the device's maps app. Uses Google Maps' navigation
+  /// intent first because it actually starts turn-by-turn directions (a plain
+  /// geo: URI just drops a pin), and falls back to geo: when Google Maps
+  /// isn't installed.
+  Future<String> _navigate(NexusAction action) async {
+    final destination = (action.args['destination'] as String? ?? '').trim();
+    if (destination.isEmpty) {
+      return 'Where should I navigate to? Try "navigate to the nearest '
+          'pharmacy".';
+    }
+
+    if (!Platform.isAndroid) {
+      return 'Navigation isn\'t available on this desktop yet — on Android '
+          'I\'d hand this to your maps app for turn-by-turn directions.';
+    }
+
+    final query = Uri.encodeComponent(destination);
+    final gmaps = AndroidIntent(
+      action: 'android.intent.action.VIEW',
+      data: 'google.navigation:q=$query&mode=d',
+    );
+    if (await gmaps.canResolveActivity() == true) {
+      final failure = await _launchIntent(gmaps);
+      if (failure != null) {
+        return 'I couldn\'t start navigation — $failure.';
+      }
+      return action.reply;
+    }
+
+    final geo = AndroidIntent(
+      action: 'android.intent.action.VIEW',
+      data: 'geo:0,0?q=$query',
+    );
+    if (await geo.canResolveActivity() == true) {
+      final failure = await _launchIntent(geo);
+      if (failure != null) {
+        return 'I couldn\'t start navigation — $failure.';
+      }
+      return action.reply;
+    }
+
+    return 'I couldn\'t find a maps app to start navigation on this device.';
   }
 }

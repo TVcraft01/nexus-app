@@ -27,4 +27,14 @@ void main() {
     expect(manifest, contains('deezer.android.app'));
     expect(manifest, contains('<package android:name="deezer.android.app"/>'));
   });
+
+  test('declares maps visibility for navigation intents', () {
+    expect(
+      manifest,
+      contains('<data android:scheme="google.navigation"/>'),
+      reason: 'google.navigation: starts turn-by-turn directions',
+    );
+    expect(manifest, contains('<data android:scheme="geo"/>'),
+        reason: 'geo: is the fallback maps intent');
+  });
 }

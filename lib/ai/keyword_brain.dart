@@ -141,6 +141,28 @@ class KeywordBrain implements NexusBrain {
       );
     }
 
+    if (_hasAny(t, const [
+      'navigate',
+      'directions',
+      'drive to',
+      'how do i get to',
+    ])) {
+      final destination = _extractNavigationDestination(input);
+      if (destination == null || destination.isEmpty) {
+        return NexusAction(
+          command: NexusCommand.navigate,
+          reply: 'Where should I navigate to? Try "navigate to the nearest '
+              'pharmacy".',
+          args: const {'needsDestination': true},
+        );
+      }
+      return NexusAction(
+        command: NexusCommand.navigate,
+        reply: 'Opening navigation to $destination…',
+        args: {'destination': destination},
+      );
+    }
+
     return NexusAction(
       command: NexusCommand.unknown,
       reply: 'Sorry, I don\'t understand that yet. Try "create a folder", '
@@ -249,6 +271,18 @@ class KeywordBrain implements NexusBrain {
     final n = int.tryParse(match.group(1)!);
     if (n == null) return null;
     return durationFromParts(amount: n, unit: match.group(2)!)?.inSeconds;
+  }
+
+  /// Pulls the destination out of "navigate to X" / "get directions to X" /
+  /// "how do I get to X" / "drive to X". Preserves the user's capitalization.
+  String? _extractNavigationDestination(String input) {
+    final match = RegExp(
+      r'(?:navigate\s+to|get\s+directions\s+to|directions\s+to|'
+      r'how\s+do\s+i\s+get\s+to|drive\s+to)\s+(.+?)\s*$',
+      caseSensitive: false,
+    ).firstMatch(input);
+    final destination = match?.group(1)?.trim();
+    return (destination == null || destination.isEmpty) ? null : destination;
   }
 
   /// Pulls the name or number to call out of "call Sam" / "dial 911". Stops

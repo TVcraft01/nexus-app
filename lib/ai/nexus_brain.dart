@@ -9,6 +9,7 @@ enum NexusCommand {
   playDeezerFlow,
   callContact,
   openEmail,
+  navigate,
   unknown,
 }
 

@@ -102,5 +102,14 @@
              scheme-only query doesn't match it; naming the package is robust
              across all of those hosts. -->
         <package android:name="deezer.android.app"/>
+        <!-- Resolve a maps app for turn-by-turn navigation (Android 11+). -->
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <data android:scheme="google.navigation"/>
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <data android:scheme="geo"/>
+        </intent>
     </queries>
 </manifest>

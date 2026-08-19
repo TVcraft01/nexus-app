@@ -171,6 +171,7 @@ class LlmBrain implements NexusBrain {
         'For setAlarm put args.time="HH:MM" in 24-hour form (e.g. "07:00" for 7am). '
         'For setTimer put args.duration={"unit":"minutes"|"seconds"|"hours","amount":N}. '
         'For callContact put args.target with the name or number to call. '
+        'For navigate put args.destination with the place to navigate to. '
         'For anything else use command "chat" and write your helpful answer in reply.';
 
     try {
@@ -410,6 +411,22 @@ class LlmBrain implements NexusBrain {
           command: NexusCommand.openEmail,
           reply: reply.isEmpty ? 'Opening your email app…' : reply,
         );
+      case 'navigate': {
+        final destination = (args['destination'] as String?)?.trim() ?? '';
+        if (destination.isEmpty) {
+          return NexusAction(
+            command: NexusCommand.navigate,
+            reply: 'Where should I navigate to? Try "navigate to the nearest '
+                'pharmacy".',
+            args: const {'needsDestination': true},
+          );
+        }
+        return NexusAction(
+          command: NexusCommand.navigate,
+          reply: reply.isEmpty ? 'Opening navigation…' : reply,
+          args: {'destination': destination},
+        );
+      }
       default:
         return NexusAction(
           command: NexusCommand.unknown,

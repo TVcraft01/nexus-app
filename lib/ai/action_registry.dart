@@ -146,6 +146,20 @@ const List<NexusActionDefinition> nexusActions = [
     ],
   ),
   NexusActionDefinition(
+    command: NexusCommand.navigate,
+    schemaName: 'navigate',
+    title: 'Navigate / get directions',
+    icon: Icons.directions_outlined,
+    description: 'Starts turn-by-turn navigation to a place. On Android it '
+        'hands off to your maps app; other platforms say so honestly instead '
+        'of doing nothing.',
+    examples: [
+      'navigate to the nearest pharmacy',
+      'get directions to work',
+      'drive to 1 Main Street',
+    ],
+  ),
+  NexusActionDefinition(
     command: NexusCommand.setPreference,
     schemaName: 'setPreference',
     title: 'Choose which device notifies you',

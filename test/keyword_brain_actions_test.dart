@@ -119,4 +119,36 @@ void main() {
       expect(a.command, NexusCommand.setReminder);
     });
   });
+
+  group('navigation recognition', () {
+    test('navigate to the nearest pharmacy', () async {
+      final a = await brain.interpret('navigate to the nearest pharmacy');
+      expect(a.command, NexusCommand.navigate);
+      expect(a.args['destination'], 'the nearest pharmacy');
+    });
+
+    test('get directions to work', () async {
+      final a = await brain.interpret('get directions to work');
+      expect(a.command, NexusCommand.navigate);
+      expect(a.args['destination'], 'work');
+    });
+
+    test('how do I get to the airport', () async {
+      final a = await brain.interpret('how do I get to the airport');
+      expect(a.command, NexusCommand.navigate);
+      expect(a.args['destination'], 'the airport');
+    });
+
+    test('drive to 1 Main Street', () async {
+      final a = await brain.interpret('drive to 1 Main Street');
+      expect(a.command, NexusCommand.navigate);
+      expect(a.args['destination'], '1 Main Street');
+    });
+
+    test('navigation without a destination asks for one', () async {
+      final a = await brain.interpret('navigate');
+      expect(a.command, NexusCommand.navigate);
+      expect(a.args['needsDestination'], isTrue);
+    });
+  });
 }
