@@ -9,17 +9,18 @@ import '../models/paired_device.dart';
 import '../pairing/pairing_service.dart';
 import '../remote/nat_keepalive.dart';
 import '../remote/nexus_datagram_channel.dart';
+import '../remote/remote_access_service.dart';
 import '../transfer/transfer_service.dart';
 
 /// Listens for incoming NexusDatagramChannel connections on the UDP socket
 /// kept alive by [NatKeepAlive]. When a connection is established, it
 /// accepts the handshake and processes the incoming file-transfer payload.
 ///
-/// The phone sends encrypted transfer data (same wire format as the HTTP
-/// POST body for /receive) over the reliable channel. This server
-/// identifies the sender by trying each paired device's transfer key and
-/// delegates to [TransferService.receiveFromUdp] for decryption and
-/// storage.
+/// Wire format (same as the HTTP /receive path, just over UDP):
+///   [4-byte request length] [request JSON] [encrypted body]
+///
+/// Request JSON: { "filename": "...", "sender": "...", "bodyLen": N }
+/// The body is the same NEXUS1 + chunked AES-GCM format as the HTTP path.
 ///
 /// This only runs on the PC (the device being reached), not on the phone.
 class UdpReceiveServer {
@@ -82,27 +83,35 @@ class UdpReceiveServer {
     NexusDatagramChannel channel,
     List<int> payload,
   ) async {
-    if (payload.length < 10) {
+    // Parse the request envelope: [4-byte request length][request JSON][body]
+    if (payload.length < 4) {
       await channel.send(
           utf8.encode('{"status":"error","message":"payload too short"}'));
       return;
     }
 
     final raw = Uint8List.fromList(payload);
-    final magicBytes = String.fromCharCodes(raw.sublist(0, 6));
-    if (magicBytes != 'NEXUS1') {
+    final reqLen = ByteData.sublistView(raw).getUint32(0, Endian.big);
+    if (raw.length < 4 + reqLen) {
       await channel.send(
-          utf8.encode('{"status":"error","message":"bad magic"}'));
+          utf8.encode('{"status":"error","message":"truncated request"}'));
       return;
     }
 
+    final requestJson = utf8.decode(raw.sublist(4, 4 + reqLen));
+    final request = jsonDecode(requestJson) as Map<String, dynamic>;
+    final bodyBytes = raw.sublist(4 + reqLen);
+
+    final encodedFilename = request['filename'] as String? ?? 'received_file';
+
+    // Identify the sender by trying each paired device's transfer key.
     final devices = await _pairing.getPairedDevices();
     PairedDevice? sender;
 
     for (final device in devices) {
       try {
         final keyBytes = base64Decode(device.transferKey);
-        await _verifyKey(raw.sublist(6), keyBytes);
+        await _verifyKey(bodyBytes, keyBytes);
         sender = device;
         break;
       } catch (_) {
@@ -117,9 +126,17 @@ class UdpReceiveServer {
     }
 
     try {
-      final received = await _transfer.receiveFromUdp(payload, sender);
+      final received = await _transfer.receiveFromUdp(
+        bodyBytes,
+        sender,
+        fileName: Uri.decodeComponent(encodedFilename),
+      );
       onFileReceived?.call(received);
-      await channel.send(utf8.encode('{"status":"ok"}'));
+      final myPublic = RemoteAccessService.instance.publicAddress;
+      await channel.send(utf8.encode(jsonEncode({
+        'status': 'ok',
+        if (myPublic != null) 'publicAddress': myPublic,
+      })));
     } catch (e) {
       await channel.send(
           utf8.encode('{"status":"error","message":"$e"}'));
@@ -129,8 +146,12 @@ class UdpReceiveServer {
   /// Minimal key verification: try to decrypt the first chunk with the
   /// given key. Throws on failure.
   Future<void> _verifyKey(List<int> data, List<int> keyBytes) async {
-    if (data.length < 4) throw StateError('truncated');
-    var offset = 4; // skip 4-byte total length
+    if (data.length < 10) throw StateError('truncated');
+    final raw = Uint8List.fromList(data);
+    final magic = String.fromCharCodes(raw.sublist(0, 6));
+    if (magic != 'NEXUS1') throw StateError('bad magic');
+    // Skip 6-byte magic + 4-byte total length
+    var offset = 10;
     if (data.length < offset + 12 + 4 + 16) throw StateError('truncated');
     final nonce = data.sublist(offset, offset + 12);
     offset += 12;
@@ -160,3 +181,5 @@ class UdpReceiveServer {
     _channels.clear();
   }
 }
+
+

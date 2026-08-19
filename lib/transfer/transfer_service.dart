@@ -14,6 +14,7 @@ import 'package:shelf/shelf_io.dart' as shelf_io;
 import '../devbridge/dev_bridge_service.dart';
 import '../models/paired_device.dart';
 import '../pairing/pairing_service.dart';
+import '../remote/nexus_datagram_channel.dart';
 import '../remote/remote_access_service.dart';
 import '../sync/sync_service.dart';
 import '../tasks/task_crypto.dart';
@@ -390,9 +391,9 @@ class TransferService {
       return;
     }
 
-    // 3. Remote path — only when the user opted in and we know the peer's
-    //    public endpoint. Direct device-to-device over the peer's forwarded
-    //    port; no relay.
+    // 3. Remote TCP path — only when the user opted in and we know the
+    //    peer's public endpoint. Direct device-to-device over the peer's
+    //    forwarded port; no relay.
     if (remote.enabled && target.publicAddress != null) {
       final parts = target.publicAddress!.split(':');
       final host = parts.first;
@@ -402,7 +403,23 @@ class TransferService {
         remote.reportStatus(target.deviceId, DeviceLinkStatus.remote);
         return;
       } catch (_) {
-        // Both paths failed; fall through to the honest, actionable message.
+        // TCP remote failed; try UDP hole-punch below.
+      }
+    }
+
+    // 4. UDP hole-punch path — when the TCP remote failed but we know the
+    //    peer's public UDP endpoint (shared by its NAT keep-alive). We
+    //    attempt a connection for a short window; if the peer's router
+    //    isn't symmetric NAT, the punch-through succeeds and we send the
+    //    file over the reliable-UDP channel.
+    if (remote.enabled && target.publicUdpEndpoint != null) {
+      try {
+        await _sendViaUdp(target, file, keyBytes, senderName, onProgress);
+        remote.reportStatus(target.deviceId, DeviceLinkStatus.remoteUdp);
+        return;
+      } catch (_) {
+        // UDP hole-punch failed (symmetric NAT, peer offline, etc.).
+        // Fall through to the honest error below.
       }
     }
 
@@ -467,6 +484,97 @@ class TransferService {
       throw Exception('Could not reach ${target.deviceName} in time.');
     } finally {
       client.close(force: true);
+    }
+  }
+
+  /// Sends [file] over a reliable-UDP channel to [target]'s public UDP
+  /// endpoint. The phone creates a fresh socket, hole-punches via
+  /// NexusDatagramChannel.connect(), streams the encrypted transfer body,
+  /// and reads the JSON response — same wire format as the HTTP path,
+  /// just carried over UDP.
+  Future<void> _sendViaUdp(
+    PairedDevice target,
+    File file,
+    List<int> keyBytes,
+    String senderName,
+    void Function(double progress)? onProgress,
+  ) async {
+    // Parse the peer's public UDP endpoint.
+    final ep = target.publicUdpEndpoint!;
+    final parts = ep.split(':');
+    final host = parts.first;
+    final port = parts.length > 1 ? (int.tryParse(parts[1]) ?? receivePort) : receivePort;
+
+    // Create a fresh socket for this outbound connection.
+    final socket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
+    try {
+      final remoteAddr = await InternetAddress.lookup(host).then(
+        (addrs) => addrs.firstWhere(
+          (a) => a.type == InternetAddressType.IPv4,
+          orElse: () => throw Exception('no IPv4 address for $host'),
+        ),
+      );
+
+      // Establish the reliable-UDP channel (SYN → SYN_ACK → ACK).
+      final channel = await NexusDatagramChannel.connect(
+        socket: socket,
+        remoteAddress: remoteAddr,
+        remotePort: port,
+        keyBytes: keyBytes,
+        timeout: const Duration(seconds: 8),
+      );
+
+      if (channel == null) {
+        throw Exception('UDP hole-punch to $ep failed');
+      }
+
+      try {
+        // Collect the encrypted transfer body into a single buffer.
+        final bodyChunks = await _encryptedBody(file, keyBytes,
+                onProgress: onProgress)
+            .toList();
+        final bodyBytes = Uint8List.fromList(bodyChunks.expand((c) => c).toList());
+
+        // Build a request envelope matching the HTTP /receive interface:
+        // { filename, sender, body }. The receiver will decrypt body using
+        // the pairing-key-derived transfer key.
+        final request = utf8.encode(jsonEncode({
+          'filename': Uri.encodeComponent(p.basename(file.path)),
+          'sender': senderName,
+          'bodyLen': bodyBytes.length,
+        }));
+
+        // Send: [4-byte request length] [request JSON] [body bytes]
+        final reqLen = _uint32(request.length);
+        final combined = BytesBuilder(copy: false)
+          ..add(reqLen)
+          ..add(request)
+          ..add(bodyBytes);
+        await channel.send(combined.toBytes());
+
+        // Read the response.
+        final responseBytes = await channel.incoming.first
+            .timeout(const Duration(seconds: 5));
+        final responseJson = utf8.decode(responseBytes);
+        final response = jsonDecode(responseJson) as Map<String, dynamic>;
+        if (response['status'] != 'ok') {
+          throw Exception(
+              'peer rejected file: ${response['message'] ?? 'unknown error'}');
+        }
+
+        // Learn the peer's public endpoint from the response.
+        final peerPublic = response['publicAddress'] as String?;
+        if (peerPublic != null && peerPublic.isNotEmpty) {
+          await _pairing.updateDevicePublicAddress(target.deviceId, peerPublic);
+        }
+
+        await _logSent(target, file);
+        unawaited(SyncService.instance.syncAll());
+      } finally {
+        await channel.close();
+      }
+    } finally {
+      socket.close();
     }
   }
 
@@ -565,14 +673,16 @@ class TransferService {
   /// transfer body ("NEXUS1" magic + chunked AES-GCM), already decrypted
   /// at the transport level by NexusDatagramChannel.
   ///
+  /// [fileName] is the original filename sent by the peer (URL-decoded).
   /// Returns the [ReceivedFile] on success, or throws on decryption failure.
   Future<ReceivedFile> receiveFromUdp(
     List<int> payload,
-    PairedDevice sender,
-  ) async {
+    PairedDevice sender, {
+    String? fileName,
+  }) async {
     final keyBytes = base64Decode(sender.transferKey);
 
-    final rawName = 'received_file';
+    final rawName = _safeFileName(fileName ?? 'received_file');
     final dir = await _receiveDir();
     final dest = _uniquePath(File(p.join(dir.path, rawName)));
 
