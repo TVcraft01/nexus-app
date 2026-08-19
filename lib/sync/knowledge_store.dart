@@ -8,6 +8,36 @@ import 'package:uuid/uuid.dart';
 /// event is created once, given an id that never changes, and never edited.
 enum KnowledgeEventType { reminder, fact, preference }
 
+/// The retention rules [KnowledgeStore.prune] applies so the append-only log
+/// does not grow unbounded forever.
+///
+/// For each type the store keeps everything within a window AND at least the
+/// most recent N events of that type (whichever is more). Reminders are the
+/// exception: a reminder that has not fired yet is always kept (pruning must
+/// never drop something the user is still waiting for), and *fired* reminders
+/// are pruned more aggressively than facts/preferences. The latest event for
+/// each preference key is also always kept, because that event defines the
+/// current behaviour (e.g. "notify only on this device").
+class KnowledgeRetentionPolicy {
+  final Duration factWindow;
+  final Duration preferenceWindow;
+  final Duration reminderFiredWindow;
+  final int minFacts;
+  final int minPreferences;
+  final int minReminders;
+
+  const KnowledgeRetentionPolicy({
+    this.factWindow = const Duration(days: 90),
+    this.preferenceWindow = const Duration(days: 90),
+    this.reminderFiredWindow = const Duration(days: 30),
+    this.minFacts = 200,
+    this.minPreferences = 200,
+    this.minReminders = 20,
+  });
+
+  static const defaults = KnowledgeRetentionPolicy();
+}
+
 /// One entry in the append-only knowledge log.
 ///
 /// `id` is generated once at creation and never changes. That single fact is
@@ -59,6 +89,14 @@ class KnowledgeStore extends ChangeNotifier {
   static const _eventsKey = 'nexus_knowledge_events';
   static const _deviceIdKey = 'nexus_device_id';
   static const _deviceNameKey = 'nexus_device_name';
+  static const _tombstonesKey = 'nexus_knowledge_tombstones';
+
+  /// How long a pruned event's id is remembered as "already seen", so a peer
+  /// that hasn't pruned yet can't resurrect it by syncing it back to us. Long
+  /// enough to outlive the longest retention window (90 days) with slack; once
+  /// it expires, the only thing that can come back is an event old enough that
+  /// a past reminder won't re-fire and a stale fact is a harmless wart.
+  static const tombstoneTtl = Duration(days: 180);
 
   /// Shared by the whole app (the Talk tab records events, sync both sends
   /// and merges them) so there is exactly one log per device.
@@ -66,6 +104,7 @@ class KnowledgeStore extends ChangeNotifier {
 
   final Uuid _uuid = const Uuid();
   final List<KnowledgeEvent> _events = [];
+  final Map<String, DateTime> _tombstones = {};
 
   String _deviceId = '';
   String _deviceName = '';
@@ -103,6 +142,16 @@ class KnowledgeStore extends ChangeNotifier {
     _events
       ..clear()
       ..addAll(raw.map((r) => KnowledgeEvent.fromJson(jsonDecode(r) as Map<String, dynamic>)));
+    final rawTombstones = prefs.getStringList(_tombstonesKey) ?? [];
+    _tombstones
+      ..clear()
+      ..addEntries(rawTombstones.map((r) {
+        final j = jsonDecode(r) as Map<String, dynamic>;
+        return MapEntry(
+          j['id'] as String,
+          DateTime.parse(j['prunedAt'] as String),
+        );
+      }));
     notifyListeners();
   }
 
@@ -186,6 +235,128 @@ class KnowledgeStore extends ChangeNotifier {
     return event;
   }
 
+  /// Test-only: adds an event with an explicit creation time/id, so pruning
+  /// tests can build a deterministic "old vs recent" log without sleeping.
+  @visibleForTesting
+  Future<KnowledgeEvent> debugAddEvent({
+    required KnowledgeEventType type,
+    required Map<String, dynamic> payload,
+    required DateTime createdAt,
+    String? id,
+  }) async {
+    final event = KnowledgeEvent(
+      id: id ?? _uuid.v4(),
+      type: type,
+      payload: payload,
+      originDeviceId: _deviceId,
+      originDeviceName: _deviceName,
+      createdAt: createdAt.toUtc(),
+    );
+    _events.add(event);
+    await _persist();
+    notifyListeners();
+    return event;
+  }
+
+  /// Prunes the log according to [policy] and returns how many events were
+  /// removed.
+  ///
+  /// Pruning is LOCAL ONLY: it never changes what a peer stores, and it never
+  /// changes when a still-pending reminder fires. To keep the sync-idempotency
+  /// guarantee, every pruned id is remembered in a bounded tombstone set, so
+  /// if a peer that hasn't pruned yet sends the same event back to us, [merge]
+  /// ignores it instead of treating it as new (which would re-schedule an
+  /// already-fired reminder).
+  Future<int> prune({
+    DateTime? now,
+    KnowledgeRetentionPolicy policy = KnowledgeRetentionPolicy.defaults,
+  }) async {
+    final at = (now ?? DateTime.now()).toUtc();
+    final keepIds = <String>{};
+
+    final reminders = _events
+        .where((e) => e.type == KnowledgeEventType.reminder)
+        .toList();
+    final fired = <KnowledgeEvent>[];
+    for (final e in reminders) {
+      final when = DateTime.tryParse(e.payload['when'] as String? ?? '');
+      if (when == null || !when.isAfter(at)) {
+        fired.add(e);
+      } else {
+        keepIds.add(e.id); // never prune a reminder that hasn't fired
+      }
+    }
+    _addRetained(fired, keepIds, at,
+        policy.reminderFiredWindow, policy.minReminders);
+
+    _addRetained(
+      _events.where((e) => e.type == KnowledgeEventType.fact).toList(),
+      keepIds,
+      at,
+      policy.factWindow,
+      policy.minFacts,
+    );
+
+    final preferences = _events
+        .where((e) => e.type == KnowledgeEventType.preference)
+        .toList();
+    _addRetained(preferences, keepIds, at,
+        policy.preferenceWindow, policy.minPreferences);
+    // The latest event per preference key defines current behaviour, so it is
+    // always kept even when it is older than the window.
+    final seenKeys = <String>{};
+    for (final e in preferences.reversed) {
+      final key = e.payload['key'] as String? ?? '';
+      if (seenKeys.add(key)) keepIds.add(e.id);
+    }
+
+    final before = _events.length;
+    final pruned = <KnowledgeEvent>[];
+    final kept = <KnowledgeEvent>[];
+    for (final e in _events) {
+      (keepIds.contains(e.id) ? kept : pruned).add(e);
+    }
+    _events
+      ..clear()
+      ..addAll(kept);
+
+    final tombstoneCountBefore = _tombstones.length;
+    for (final e in pruned) {
+      _tombstones[e.id] = at;
+    }
+    _expireTombstones(at);
+
+    if (pruned.isNotEmpty) await _persist();
+    if (_tombstones.length != tombstoneCountBefore) {
+      await _persistTombstones();
+    }
+    if (before != _events.length) notifyListeners();
+    return pruned.length;
+  }
+
+  void _addRetained(
+    List<KnowledgeEvent> events,
+    Set<String> keepIds,
+    DateTime now,
+    Duration window,
+    int minCount,
+  ) {
+    final cutoff = now.subtract(window);
+    for (final e in events) {
+      if (e.createdAt.isAfter(cutoff)) keepIds.add(e.id);
+    }
+    final byNewest = events.toList()
+      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    for (final e in byNewest.take(minCount)) {
+      keepIds.add(e.id);
+    }
+  }
+
+  void _expireTombstones(DateTime now) {
+    final cutoff = now.subtract(tombstoneTtl);
+    _tombstones.removeWhere((_, prunedAt) => prunedAt.isBefore(cutoff));
+  }
+
   /// Events created strictly after [since] — what a peer missing our newer
   /// events should receive. An append-only log makes this exact.
   List<KnowledgeEvent> eventsSince(DateTime since) =>
@@ -195,10 +366,16 @@ class KnowledgeStore extends ChangeNotifier {
   /// anything new is appended. Returns the newly-added events so the caller
   /// can act on them once (e.g. schedule a reminder notification). Idempotent:
   /// merging the same set twice returns nothing the second time.
+  ///
+  /// An event id in the tombstone set (pruned locally) is ALSO ignored: a
+  /// peer that hasn't pruned yet may legitimately send it back, and it must
+  /// not be treated as "new" again — otherwise pruning would resurrect old
+  /// reminders and re-schedule them.
   Future<List<KnowledgeEvent>> merge(List<KnowledgeEvent> incoming) async {
     final added = <KnowledgeEvent>[];
     for (final event in incoming) {
       if (hasEvent(event.id)) continue;
+      if (_tombstones.containsKey(event.id)) continue;
       _events.add(event);
       added.add(event);
     }
@@ -214,6 +391,17 @@ class KnowledgeStore extends ChangeNotifier {
     await prefs.setStringList(
       _eventsKey,
       [for (final e in _events) jsonEncode(e.toJson())],
+    );
+  }
+
+  Future<void> _persistTombstones() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(
+      _tombstonesKey,
+      [
+        for (final e in _tombstones.entries)
+          jsonEncode({'id': e.key, 'prunedAt': e.value.toIso8601String()}),
+      ],
     );
   }
 }
