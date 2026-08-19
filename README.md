@@ -138,6 +138,27 @@ comfortably run — it never forces a one-size-fits-all choice:
 
 ---
 
+## Get the Android app from your phone (no computer needed)
+
+Every push to `main` is built and tested automatically by GitHub Actions, so
+you can download a fresh APK straight from your phone's browser without a PC:
+
+1. Open the repository on GitHub and tap the **Actions** tab (this works fine
+   in a phone browser).
+2. Open the most recent workflow run — wait for it to show a green check,
+   which means `flutter analyze`, the tests, and the build all passed.
+3. Scroll to the **Artifacts** section and tap **nexus-app-debug-apk** to
+   download it. Artifacts download as a `.zip` containing the `.apk`.
+4. Open the zip (your phone's file manager can do this, or any free zip app),
+   then tap `app-debug.apk` inside it.
+5. Android asks you to allow installing apps from that source the first time —
+   confirm, then tap **Install**.
+
+The same run also uploads a **nexus-app-linux** bundle you can download the
+same way on a computer.
+
+---
+
 ## What you need before running this (one-time setup)
 
 Since I can't install anything on your physical devices remotely, here's
