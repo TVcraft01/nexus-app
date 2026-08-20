@@ -13,6 +13,10 @@ package com.example.nexus_app
  * vs. EUR). The evaluator itself never fetches anything and never touches the
  * network.
  *
+ * [extractAndEvaluate] finds the arithmetic/conversion expression at the END
+ * of a larger piece of text (e.g. "note: 12+8=" → 20) so the feature works
+ * even when there is text before the expression.
+ *
  * Pure Kotlin with no Android dependencies so it is unit-testable on the JVM.
  */
 object MathExpressionEvaluator {
@@ -20,9 +24,9 @@ object MathExpressionEvaluator {
     /**
      * The outcome of evaluating a recognized expression.
      *
-     * [expression] is the CLEANED expression text (no trailing '=') exactly as
-     * the user typed it — this is what gets auto-inserted, so an already-
-     * inserted "2+2 = 4" can never produce a malformed "2+2 = = 4" re-insert.
+     * [expression] is the CLEANED expression text in canonical form, used when
+     * the result is inserted back into the field (so an already-inserted
+     * "2+2 = 4" can never be re-inserted as "2+2 = = 4").
      */
     data class MathResult(
         val expression: String,
@@ -35,6 +39,13 @@ object MathExpressionEvaluator {
         /** Set when the expression was recognized but can't be completed yet
          *  (e.g. exchange rates not available). */
         val unavailableReason: String? = null,
+    )
+
+    /** A recognized expression plus where it begins in the original text, so
+     *  the caller can splice the result in over exactly that range. */
+    data class Extraction(
+        val result: MathResult,
+        val startIndex: Int,
     )
 
     private val trailingEquals = Regex("=\\s*$")
@@ -50,13 +61,16 @@ object MathExpressionEvaluator {
         Regex("^(\\d+(?:\\.\\d+)?)\\s*([€$£¥])\\s*(?:in|=)\\s*([€$£¥])\\s*=?\\s*$")
 
     /**
-     * Evaluates [text]. Returns a [MathResult] if it matches the narrow
-     * grammar, or null if it doesn't (the text is then discarded — no parsing
-     * of arbitrary content happens).
-     *
-     * Currency conversions are recognized when the text contains a currency
-     * symbol; they may end in '=' or in the target symbol ("10€ in $ =" and
-     * "10€=$" both work). Plain arithmetic must end with '='.
+     * Characters that can belong to the trailing expression when scanning
+     * backwards through surrounding text. Includes '=' so the "10€=$"
+     * conversion form survives, and 'x' so "2x3" multiplication does too.
+     */
+    private val suffixChars = "0123456789.+-*/().^%÷×x²³€$£¥="
+
+    /**
+     * Evaluates [text], which must BE the expression itself (optionally with a
+     * trailing '=' for arithmetic). Currency conversions may end in '=' or in
+     * the target symbol. Returns null if it doesn't match the narrow grammar.
      */
     fun evaluate(
         text: String,
@@ -65,13 +79,84 @@ object MathExpressionEvaluator {
         if (text.isEmpty()) return null
 
         if (text.any { it in currencySymbols }) {
-            return evaluateConversion(text, rateProvider)
+            return evaluateConversion(text.trim(), rateProvider)
         }
         if (!trailingEquals.containsMatchIn(text)) return null
 
         val expr = text.replace(trailingEquals, "").trim()
         if (expr.isEmpty()) return null
         return evaluateArithmetic(expr)
+    }
+
+    /**
+     * Finds and evaluates an arithmetic/conversion expression at the END of
+     * [text], ignoring any preceding prose (e.g. "note: 12+8="). Returns the
+     * result and the index in [text] where the expression begins, or null.
+     *
+     * The expression must still be complete: arithmetic ends with '=', and a
+     * conversion ends with '=' or a currency symbol.
+     */
+    fun extractAndEvaluate(
+        text: String,
+        rateProvider: (String) -> Double? = { null },
+    ): Extraction? {
+        if (text.isEmpty()) return null
+
+        // Locate the trigger at the end of the text (ignoring trailing whitespace).
+        var j = text.length - 1
+        while (j >= 0 && text[j].isWhitespace()) j--
+        if (j < 0) return null
+
+        val last = text[j]
+        val hasTrailingEquals = last == '='
+        val endsWithCurrency = last in currencySymbols
+        if (!hasTrailingEquals && !endsWithCurrency) return null
+
+        // `end` is exclusive; for arithmetic the trailing '=' is the trigger
+        // and is not part of the expression. For a conversion ending in a
+        // currency symbol, that symbol IS part of the expression.
+        val end = if (hasTrailingEquals) j else j + 1
+
+        // Walk backwards over expression characters.
+        var i = end - 1
+        val sb = StringBuilder()
+        while (i >= 0) {
+            val c = text[i]
+            when {
+                c.isWhitespace() || suffixChars.contains(c) -> {
+                    sb.append(c)
+                    i--
+                }
+                c == 'n' && i >= 1 && text[i - 1] == 'i' && sb.any { it in currencySymbols } -> {
+                    // The word "in" inside a currency conversion. The buffer
+                    // is built backwards, so append it reversed ("ni").
+                    sb.append("ni")
+                    i -= 2
+                }
+                else -> break
+            }
+        }
+        val raw = sb.reverse().toString()
+        val leadingWs = raw.length - raw.trimStart().length
+        val expr = raw.trim()
+        if (expr.isEmpty()) return null
+        val startIndex = i + 1 + leadingWs
+
+        val result = evaluateExpression(expr, rateProvider) ?: return null
+        return Extraction(result, startIndex)
+    }
+
+    /** Evaluates an already-extracted expression (no trailing '=' expected). */
+    private fun evaluateExpression(
+        expr: String,
+        rateProvider: (String) -> Double?,
+    ): MathResult? {
+        if (expr.isEmpty()) return null
+        return if (expr.any { it in currencySymbols }) {
+            evaluateConversion(expr, rateProvider)
+        } else {
+            evaluateArithmetic(expr)
+        }
     }
 
     // -----------------------------------------------------------------------

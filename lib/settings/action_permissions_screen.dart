@@ -406,11 +406,11 @@ class _MathNotesToggleState extends State<_MathNotesToggle> {
           title: const Text('Math notes'),
           subtitle: const Text(
               'When you type a simple expression ending with = (like 12+8=), '
-              'Nexus shows the result in a small popup and, if you pause for '
-              'a moment, writes it into the field for you — typing or '
-              'deleting during the pause cancels it. Works with ÷ × x, ²/^ '
-              'and %, plus conversions like 10€ in \$ =. Password fields and '
-              'financial apps are always skipped. Off by default.'),
+              'Nexus shows the result in a small chip above the keyboard — '
+              'tap it to insert the answer into the field, or copy it. Works '
+              'even when there is text before the expression, with ÷ × x, '
+              '²/^ and %, plus conversions like 10€ in \$ =. Password fields '
+              'and financial apps are always skipped. Off by default.'),
           value: _enabled!,
           onChanged: _onToggle,
         ),
@@ -428,9 +428,8 @@ class _MathNotesToggleState extends State<_MathNotesToggle> {
                       SizedBox(width: 8),
                       Expanded(
                         child: Text(
-                          'Results will appear in a small popup on top of '
-                          'other apps, then get written into the field after '
-                          'a short pause.',
+                          'Results appear in a small chip above the keyboard; '
+                          'tap it to insert or copy the answer.',
                           style: TextStyle(fontSize: 12),
                         ),
                       ),

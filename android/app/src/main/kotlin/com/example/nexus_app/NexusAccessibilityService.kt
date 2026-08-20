@@ -31,16 +31,6 @@ class NexusAccessibilityService : AccessibilityService() {
         private var instance: NexusAccessibilityService? = null
         private var pendingAction: ((NexusAccessibilityService) -> Unit)? = null
         private var mathNotesEnabled = false
-        // Re-trigger guard: ignores text-change events fired by Nexus's own
-        // auto-insert, so the inserted result is never re-detected (loop safety).
-        private val reTriggerGuard = MathReTriggerGuard()
-
-        /**
-         * Grace period before a computed result is auto-inserted. The result
-         * popup shows immediately; if the user types or deletes anything
-         * during this window, the insert is cancelled.
-         */
-        private const val INSERT_DELAY_MS = 2000L
 
         /** Enable or disable the math-notes text-change listener. */
         fun setMathNotesEnabled(enabled: Boolean) {
@@ -76,13 +66,14 @@ class NexusAccessibilityService : AccessibilityService() {
         }
     }
 
-    // ---- Math notes: pending insert + result popup ------------------------
+    // ---- Math notes: result chip (tappable, no auto-insert) ----------------
 
-    private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
-    private var pendingInsert: PendingInsert? = null
-    private var pendingRunnable: Runnable? = null
-    private var resultPopupRoot: android.view.View? = null
-    private var resultPopupResultView: android.widget.TextView? = null
+    private var lastExtraction: MathExpressionEvaluator.Extraction? = null
+    private var resultChipRoot: android.widget.LinearLayout? = null
+    private var resultChipResultView: android.widget.TextView? = null
+    private var resultChipNoteView: android.widget.TextView? = null
+    private var resultChipParams: android.view.WindowManager.LayoutParams? = null
+    private var resultChipPackage: String? = null
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -107,30 +98,23 @@ class NexusAccessibilityService : AccessibilityService() {
 
         when (event.eventType) {
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
-                // The user left the app (different package) — drop any
-                // pending insert and its result popup. Same-app window
-                // transitions (keyboard, results panel) must NOT cancel:
-                // they are not the user leaving the field. Window-state
-                // events from OUR OWN package are the result popup itself
-                // (a TYPE_APPLICATION_OVERLAY) — they must never cancel.
+                // The user left the app the chip was shown over (different
+                // package) — dismiss it. Same-app window transitions
+                // (keyboard, results panel) and events from OUR OWN package
+                // (the chip overlay itself) must NOT dismiss it.
                 val eventPkg = event.packageName?.toString()
-                val pendingPkg = pendingInsert?.source?.packageName?.toString()
-                if (eventPkg != null && pendingPkg != null &&
-                    eventPkg != pendingPkg && eventPkg != packageName
+                val chipPkg = resultChipPackage
+                if (eventPkg != null && chipPkg != null &&
+                    eventPkg != chipPkg && eventPkg != packageName
                 ) {
-                    cancelPendingInsert()
+                    dismissResultChip()
                 }
             }
             AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED -> {
                 // Math notes: listen for text changes in editable fields.
                 // SAFEGUARD ORDERING: password/financial checks happen BEFORE
                 // any text content is read — this is the privacy guarantee.
-                // The suppression-window half of the re-trigger guard drops
-                // immediate text-change events caused by Nexus's own
-                // auto-insert (loop prevention). The dedupe half runs later,
-                // inside handleMathNotes, where the text is already known to
-                // be safe to read.
-                if (mathNotesEnabled && !reTriggerGuard.isWithinSuppressionWindow()) {
+                if (mathNotesEnabled) {
                     handleMathNotes(event)
                 }
             }
@@ -174,53 +158,40 @@ class NexusAccessibilityService : AccessibilityService() {
                 ?: event.text?.joinToString("")
                 ?: return
 
-            // Re-trigger guard (layer 2): a delayed event re-delivering the
-            // expression Nexus is already acting on (pending or inserted) is
-            // ignored — it is an app re-render, not user input.
-            if (reTriggerGuard.isDuplicateOfRecentAction(text)) {
-                source.recycle()
-                return
-            }
+            val bounds = android.graphics.Rect()
+            source.getBoundsInScreen(bounds)
 
-            // Any OTHER text change is real user input (typing or deleting):
-            // cancel a pending auto-insert and its popup — if the user does
-            // anything during the short delay, the result is NOT written.
-            cancelPendingInsert()
-
-            // Pure deletions never trigger a calculation. Deleting the
-            // inserted " = 4" must not re-run the math (the old
-            // "2+2 = = 4" bug came from exactly this).
-            if (event.removedCount > 0 && event.addedCount == 0) {
-                source.recycle()
-                return
-            }
-
-            // Evaluate the math expression directly on the Kotlin side.
-            // This avoids a Dart round-trip and keeps the popup fast.
-            val outcome = MathExpressionEvaluator.evaluate(text) { sym ->
+            // Evaluate the expression at the END of the text (works even with
+            // preceding prose like "note: 12+8="), directly on the Kotlin side.
+            val extraction = MathExpressionEvaluator.extractAndEvaluate(text) { sym ->
                 CurrencyRates.rateFor(sym)
             }
-            if (outcome != null) {
-                if (outcome.unavailableReason != null) {
-                    // e.g. currency rates not fetched yet — honest note, and
-                    // kick a fetch so the next attempt works.
-                    try {
-                        android.widget.Toast.makeText(
-                            this,
-                            outcome.unavailableReason,
-                            android.widget.Toast.LENGTH_LONG
-                        ).show()
-                    } catch (_: Exception) {}
-                    CurrencyRates.refresh()
-                    source.recycle()
-                    return
-                }
-                // deliverMathResult takes ownership of `source` (it may hold
-                // it for the short delay before auto-inserting).
-                deliverMathResult(outcome, source)
-            } else {
+            if (extraction != null && extraction.result.unavailableReason != null) {
+                // e.g. currency rates not fetched yet — honest note, and kick
+                // a fetch so the next attempt works.
+                dismissResultChip()
+                try {
+                    android.widget.Toast.makeText(
+                        this,
+                        extraction.result.unavailableReason,
+                        android.widget.Toast.LENGTH_LONG
+                    ).show()
+                } catch (_: Exception) {}
+                CurrencyRates.refresh()
                 source.recycle()
+                return
             }
+
+            val packageNameForChip = packageName
+            if (extraction != null) {
+                lastExtraction = extraction
+                resultChipPackage = packageNameForChip
+                showResultChip(extraction.result, bounds)
+            } else {
+                lastExtraction = null
+                dismissResultChip()
+            }
+            source.recycle()
         } catch (e: Exception) {
             // Math notes is best-effort; never crash the accessibility service
         }
@@ -254,95 +225,197 @@ class NexusAccessibilityService : AccessibilityService() {
     // -----------------------------------------------------------------------
 
     /**
-     * Delivers a computed math result with a short grace delay, so the result
-     * is visible BEFORE anything is written and the user can keep typing:
-     *  1. Show a small popup with "= result" near the field immediately.
-     *  2. If the user does nothing for [INSERT_DELAY_MS] (2s), auto-insert the
-     *     result ("12+8=" becomes "12+8 = 20") when the field supports
-     *     ACTION_SET_TEXT, or copy it to the clipboard and confirm on the
-     *     popup (which then auto-dismisses) when it doesn't.
-     *  3. If the user types or deletes anything during the delay, the insert
-     *     is cancelled — nothing is written without the user's pause.
+     * Shows the result as a small tappable chip in the keyboard's suggestion
+     * area (the space where word suggestions appear), Apple-Math-Notes style.
+     * Nothing is auto-inserted — the user taps the chip to insert the result
+     * into the field, or (if the field can't take text) to copy it.
      *
      * Only the result value (a number) is logged, never the typed expression.
      */
-    private fun deliverMathResult(result: MathExpressionEvaluator.MathResult, source: AccessibilityNodeInfo) {
-        // Drop any previous pending insert and its popup first.
-        cancelPendingInsert()
+    private fun showResultChip(result: MathExpressionEvaluator.MathResult, fieldBounds: android.graphics.Rect) {
+        try {
+            val wm = getSystemService(android.content.Context.WINDOW_SERVICE) as android.view.WindowManager
+            val rateNote = if (result.isConversion) rateNoteFor(result) else null
 
-        val supportsDirectInsert = try {
-            source.isEditable &&
-                source.actionList.any { it.id == AccessibilityNodeInfo.ACTION_SET_TEXT }
+            if (resultChipRoot == null) {
+                val resultTv = android.widget.TextView(this).apply {
+                    textSize = 16f
+                    setTextColor(android.graphics.Color.parseColor("#1565C0"))
+                    setTypeface(typeface, android.graphics.Typeface.BOLD)
+                    setPadding(20, 8, 20, 0)
+                }
+                val noteTv = android.widget.TextView(this).apply {
+                    textSize = 12f
+                    setTextColor(android.graphics.Color.parseColor("#5C6BC0"))
+                    setPadding(20, 0, 20, 8)
+                }
+                val layout = android.widget.LinearLayout(this).apply {
+                    orientation = android.widget.LinearLayout.VERTICAL
+                    setBackgroundColor(android.graphics.Color.parseColor("#E3F2FD"))
+                    addView(resultTv)
+                    addView(noteTv)
+                    setOnClickListener { onResultChipTapped() }
+                }
+                val params = android.view.WindowManager.LayoutParams(
+                    android.view.WindowManager.LayoutParams.WRAP_CONTENT,
+                    android.view.WindowManager.LayoutParams.WRAP_CONTENT,
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O)
+                        android.view.WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                    else
+                        @Suppress("DEPRECATION")
+                        android.view.WindowManager.LayoutParams.TYPE_PHONE,
+                    android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                        android.view.WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+                    android.graphics.PixelFormat.TRANSLUCENT
+                ).apply {
+                    gravity = android.view.Gravity.TOP or android.view.Gravity.START
+                    x = fieldBounds.left.coerceAtLeast(0)
+                    y = chipY(fieldBounds)
+                }
+                wm.addView(layout, params)
+                resultChipRoot = layout
+                resultChipResultView = resultTv
+                resultChipNoteView = noteTv
+                resultChipParams = params
+            } else {
+                resultChipParams?.let { p ->
+                    p.x = fieldBounds.left.coerceAtLeast(0)
+                    p.y = chipY(fieldBounds)
+                    wm.updateViewLayout(resultChipRoot, p)
+                }
+            }
+
+            resultChipResultView?.text = "= ${result.formatted}"
+            val note = rateNote
+            resultChipNoteView?.let {
+                it.text = note
+                it.visibility = if (note == null) android.view.View.GONE else android.view.View.VISIBLE
+            }
         } catch (e: Exception) {
-            // A stale/recycled node (the app re-rendered) — degrade to the
-            // clipboard fallback instead of failing silently.
-            Log.e(TAG, "Math notes: could not inspect field", e)
-            false
+            // "Display over other apps" not granted: fall back to a Toast.
+            dismissResultChip()
+            try {
+                android.widget.Toast.makeText(this, "= ${result.formatted}", android.widget.Toast.LENGTH_LONG).show()
+            } catch (_: Exception) {}
+            Log.e(TAG, "Failed to show math chip", e)
         }
-        val rateNote = if (result.isConversion) rateNoteFor(result) else null
+    }
 
-        showResultPopup(result, rateNote, source)
-        reTriggerGuard.notePending(result.expression)
+    /**
+     * Vertical position of the chip: snug against the top of the soft
+     * keyboard (the word-suggestion area), falling back to just below the
+     * field when the keyboard window can't be located.
+     */
+    private fun chipY(fieldBounds: android.graphics.Rect): Int {
+        val imeTop = imeWindowTop()
+        if (imeTop != null && imeTop > 0) {
+            val height = resultChipRoot?.height?.takeIf { it > 0 } ?: dp(52)
+            return (imeTop - height).coerceAtLeast(0)
+        }
+        return fieldBounds.bottom + 8
+    }
 
-        val runnable = Runnable {
-            pendingInsert = null
-            pendingRunnable = null
-            if (supportsDirectInsert) {
-                val newText = "${result.expression} = ${result.formatted}"
-                // Record the insert BEFORE performing it, so the events it
-                // fires are suppressed (window + fragment dedupe) and the
-                // inserted result is never re-detected as a new expression.
-                reTriggerGuard.noteInsert(result.expression, newText)
+    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+
+    /** Top screen Y of the soft keyboard's window, if visible. */
+    private fun imeWindowTop(): Int? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) return null
+        return try {
+            val wins = windows ?: return null
+            var top: Int? = null
+            for (w in wins) {
+                if (w.type == android.view.accessibility.AccessibilityWindowInfo.TYPE_INPUT_METHOD) {
+                    val b = android.graphics.Rect()
+                    w.getBoundsInScreen(b)
+                    top = b.top
+                }
+                w.recycle()
+            }
+            top
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /** Tap on the chip: insert the result into the field, or copy it. */
+    private fun onResultChipTapped() {
+        val extraction = lastExtraction ?: return
+        val result = extraction.result
+        val node = findFocusedEditable()
+        if (node == null) {
+            copyToClipboard(result.formatted)
+            showChipCopied(result.formatted)
+            return
+        }
+        try {
+            val supportsInsert = node.isEditable &&
+                node.actionList.any { it.id == AccessibilityNodeInfo.ACTION_SET_TEXT }
+            if (supportsInsert) {
+                val fullText = node.text?.toString() ?: ""
+                val start = extraction.startIndex.coerceIn(0, fullText.length)
+                val newText = fullText.substring(0, start) +
+                    result.expression + " = " + result.formatted
                 val args = Bundle().apply {
                     putCharSequence(
                         AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
                         newText
                     )
                 }
-                val inserted = try {
-                    source.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
-                } catch (_: Exception) {
-                    false
-                } finally {
-                    try { source.recycle() } catch (_: Exception) {}
+                if (node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)) {
+                    Log.d(TAG, "Math notes: ${result.formatted} inserted on tap")
+                    dismissResultChip()
+                    return
                 }
-                if (inserted) {
-                    Log.d(TAG, "Math notes: ${result.formatted} delivered via auto-insert")
-                    dismissResultPopup()
-                    return@Runnable
-                }
-            } else {
-                try { source.recycle() } catch (_: Exception) {}
             }
-
-            // Fallback: the field can't take direct insertion — copy the
-            // result and confirm on the popup; it auto-dismisses on its own.
             copyToClipboard(result.formatted)
-            updateResultPopup("= ${result.formatted} · copied")
-            dismissResultPopupAfter(3000)
-            Log.d(TAG, "Math notes: ${result.formatted} delivered via clipboard + overlay")
+            showChipCopied(result.formatted)
+        } catch (e: Exception) {
+            copyToClipboard(result.formatted)
+            showChipCopied(result.formatted)
+        } finally {
+            try { node.recycle() } catch (_: Exception) {}
         }
-        pendingInsert = PendingInsert(source)
-        pendingRunnable = runnable
-        mainHandler.postDelayed(runnable, INSERT_DELAY_MS)
     }
 
-    /** Holds the accessibility node until the delayed insert fires or is cancelled. */
-    private class PendingInsert(val source: AccessibilityNodeInfo)
+    /** Finds the focused editable node in the active window, if any. */
+    private fun findFocusedEditable(): AccessibilityNodeInfo? {
+        val root = rootInActiveWindow ?: return null
+        val found = findFocusedEditableIn(root)
+        if (found == null) root.recycle()
+        return found
+    }
 
-    /**
-     * Cancels a pending auto-insert (called when the user types or deletes
-     * during the delay, or leaves the field/app).
-     */
-    private fun cancelPendingInsert() {
-        pendingRunnable?.let { mainHandler.removeCallbacks(it) }
-        pendingRunnable = null
-        val pending = pendingInsert
-        pendingInsert = null
-        pending?.let {
-            try { it.source.recycle() } catch (_: Exception) {}
+    private fun findFocusedEditableIn(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        if (node.isFocused && node.isEditable) return node
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            val found = findFocusedEditableIn(child)
+            if (found != null) return found
+            child.recycle()
         }
-        dismissResultPopup()
+        return null
+    }
+
+    private fun showChipCopied(result: String) {
+        resultChipResultView?.text = "= $result · copied"
+        resultChipNoteView?.visibility = android.view.View.GONE
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+            dismissResultChip()
+        }, 2500)
+    }
+
+    private fun dismissResultChip() {
+        val view = resultChipRoot ?: return
+        resultChipRoot = null
+        resultChipResultView = null
+        resultChipNoteView = null
+        resultChipParams = null
+        resultChipPackage = null
+        lastExtraction = null
+        try {
+            val wm = getSystemService(android.content.Context.WINDOW_SERVICE) as android.view.WindowManager
+            wm.removeView(view)
+        } catch (_: Exception) {}
     }
 
     private fun copyToClipboard(result: String) {
@@ -364,90 +437,7 @@ class NexusAccessibilityService : AccessibilityService() {
         return if (staleness != null) "$note · $staleness" else note
     }
 
-    /** Shows a small popup with the result near the field; tap to dismiss early. */
-    private fun showResultPopup(result: MathExpressionEvaluator.MathResult, rateNote: String?, source: AccessibilityNodeInfo) {
-        try {
-            val wm = getSystemService(android.content.Context.WINDOW_SERVICE) as android.view.WindowManager
-            val bounds = android.graphics.Rect()
-            source.getBoundsInScreen(bounds)
 
-            val resultTv = android.widget.TextView(this).apply {
-                text = "= ${result.formatted}"
-                setTextColor(android.graphics.Color.parseColor("#1565C0"))
-                textSize = 16f
-                setTypeface(typeface, android.graphics.Typeface.BOLD)
-                setPadding(20, 10, 20, if (rateNote == null) 10 else 2)
-            }
-            val layout = android.widget.LinearLayout(this).apply {
-                orientation = android.widget.LinearLayout.VERTICAL
-                setBackgroundColor(android.graphics.Color.parseColor("#E3F2FD"))
-                addView(resultTv)
-                if (rateNote != null) {
-                    addView(android.widget.TextView(this@NexusAccessibilityService).apply {
-                        text = rateNote
-                        setTextColor(android.graphics.Color.parseColor("#5C6BC0"))
-                        textSize = 12f
-                        setPadding(20, 0, 20, 10)
-                    })
-                }
-                // Tapping dismisses early; it is never required.
-                setOnClickListener { dismissResultPopup() }
-            }
-
-            val params = android.view.WindowManager.LayoutParams(
-                android.view.WindowManager.LayoutParams.WRAP_CONTENT,
-                android.view.WindowManager.LayoutParams.WRAP_CONTENT,
-                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O)
-                    android.view.WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-                else
-                    @Suppress("DEPRECATION")
-                    android.view.WindowManager.LayoutParams.TYPE_PHONE,
-                android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                    android.view.WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
-                android.graphics.PixelFormat.TRANSLUCENT
-            ).apply {
-                gravity = android.view.Gravity.TOP or android.view.Gravity.START
-                x = bounds.left
-                y = bounds.bottom + 8
-            }
-
-            wm.addView(layout, params)
-            resultPopupRoot = layout
-            resultPopupResultView = resultTv
-        } catch (e: Exception) {
-            // "Display over other apps" not granted: fall back to a Toast
-            // (which dismisses itself too) so the result is never silently
-            // dropped. The delayed insert/copy still happens.
-            resultPopupRoot = null
-            resultPopupResultView = null
-            try {
-                android.widget.Toast.makeText(
-                    this,
-                    "= ${result.formatted}",
-                    android.widget.Toast.LENGTH_LONG
-                ).show()
-            } catch (_: Exception) {}
-            Log.e(TAG, "Failed to show math popup", e)
-        }
-    }
-
-    private fun updateResultPopup(text: String) {
-        resultPopupResultView?.text = text
-    }
-
-    private fun dismissResultPopup() {
-        val view = resultPopupRoot ?: return
-        resultPopupRoot = null
-        resultPopupResultView = null
-        try {
-            val wm = getSystemService(android.content.Context.WINDOW_SERVICE) as android.view.WindowManager
-            wm.removeView(view)
-        } catch (_: Exception) {}
-    }
-
-    private fun dismissResultPopupAfter(ms: Long) {
-        mainHandler.postDelayed({ dismissResultPopup() }, ms)
-    }
 
     override fun onInterrupt() {
         Log.d(TAG, "Accessibility service interrupted")
@@ -455,7 +445,7 @@ class NexusAccessibilityService : AccessibilityService() {
 
     override fun onDestroy() {
         instance = null
-        cancelPendingInsert()
+        dismissResultChip()
         MainActivity.channel?.invokeMethod("onAccessibilityServiceChanged", false)
         super.onDestroy()
     }

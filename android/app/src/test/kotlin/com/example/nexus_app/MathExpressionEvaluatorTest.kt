@@ -243,4 +243,63 @@ class MathExpressionEvaluatorTest {
         // A currency symbol present but not in conversion form → rejected.
         assertNull(MathExpressionEvaluator.evaluate("2+€=", testRates))
     }
+
+    // ---- extraction with preceding text -------------------------------------
+
+    @Test
+    fun extractionIgnoresPrecedingProse() {
+        val e = MathExpressionEvaluator.extractAndEvaluate("note: 12+8=")
+        assertNotNull(e)
+        assertEquals("20", e!!.result.formatted)
+        assertEquals("12+8", e.result.expression)
+        // The expression starts right after "note: ".
+        assertEquals(6, e.startIndex)
+    }
+
+    @Test
+    fun extractionWithSpacesInExpression() {
+        val e = MathExpressionEvaluator.extractAndEvaluate("the total is 2 + 2 =")
+        assertNotNull(e)
+        assertEquals("4", e!!.result.formatted)
+    }
+
+    @Test
+    fun extractionUsesTheLastEqualsSign() {
+        val e = MathExpressionEvaluator.extractAndEvaluate("x = 5; 12+8=")
+        assertNotNull(e)
+        assertEquals("20", e!!.result.formatted)
+    }
+
+    @Test
+    fun extractionRejectsNonMathProseBefore() {
+        assertNull(MathExpressionEvaluator.extractAndEvaluate("I have 3 cats ="))
+        assertNull(MathExpressionEvaluator.extractAndEvaluate("the answer is ="))
+    }
+
+    @Test
+    fun extractionCurrencyWithProse() {
+        val e = MathExpressionEvaluator.extractAndEvaluate("price: 10€ in $ =", testRates)
+        assertNotNull(e)
+        assertEquals("10.87 $", e!!.result.formatted)
+        assertTrue(e.result.isConversion)
+    }
+
+    @Test
+    fun extractionCurrencyEqualsForm() {
+        val e = MathExpressionEvaluator.extractAndEvaluate("10€=$", testRates)
+        assertNotNull(e)
+        assertEquals("10.87 $", e!!.result.formatted)
+        assertEquals(0, e.startIndex)
+    }
+
+    @Test
+    fun extractionStartIndexKeepsThePrecedingText() {
+        val text = "total: 3*4="
+        val e = MathExpressionEvaluator.extractAndEvaluate(text)
+        assertNotNull(e)
+        // Rebuilding the insertion the service performs must round-trip.
+        val inserted = text.substring(0, e!!.startIndex) +
+            e.result.expression + " = " + e.result.formatted
+        assertEquals("total: 3*4 = 12", inserted)
+    }
 }
