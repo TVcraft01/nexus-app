@@ -4,6 +4,7 @@ import android.content.Intent
 import android.provider.Settings
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
@@ -11,8 +12,24 @@ class MainActivity : FlutterActivity() {
     companion object {
         private const val CHANNEL = "com.example.nexus_app/accessibility"
         private const val MATH_NOTES_CHANNEL = "com.example.nexus_app/math_notes"
+        private const val READ_ALOUD_CHANNEL = "com.example.nexus_app/read_aloud"
         var channel: MethodChannel? = null
         var mathNotesChannel: MethodChannel? = null
+        var readAloudSink: EventChannel.EventSink? = null
+    }
+
+    private fun handleProcessTextIntent(intent: Intent) {
+        if (intent.action == Intent.ACTION_PROCESS_TEXT) {
+            val text = intent.getCharSequenceExtra(Intent.EXTRA_PROCESS_TEXT)
+            if (!text.isNullOrEmpty()) {
+                readAloudSink?.success(text.toString())
+            }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleProcessTextIntent(intent)
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -176,6 +193,19 @@ class MainActivity : FlutterActivity() {
 
         // Math notes channel: receives text-change events from the accessibility service
         mathNotesChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, MATH_NOTES_CHANNEL)
+
+        // Read-aloud: EventChannel streams selected text from ACTION_PROCESS_TEXT
+        EventChannel(flutterEngine.dartExecutor.binaryMessenger, READ_ALOUD_CHANNEL)
+            .setStreamHandler(object : EventChannel.StreamHandler {
+                override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
+                    readAloudSink = events
+                    // Handle cold-start intent if present
+                    handleProcessTextIntent(intent)
+                }
+                override fun onCancel(arguments: Any?) {
+                    readAloudSink = null
+                }
+            })
     }
 
     private fun findFocusedEditable(node: android.view.accessibility.AccessibilityNodeInfo): android.view.accessibility.AccessibilityNodeInfo? {

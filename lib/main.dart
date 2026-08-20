@@ -27,6 +27,8 @@ import 'transfer/files_screen.dart';
 import 'transfer/send_file_screen.dart';
 import 'transfer/transfer_service.dart';
 import 'math_notes/math_notes_service.dart';
+import 'read_aloud/read_aloud_service.dart';
+import 'read_aloud/read_aloud_widget.dart';
 
 void main() {
   voskQuiet(); // silence Vosk's stderr logging on the C side.
@@ -86,6 +88,8 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     ActionRegistry.instance.init();
     // Math notes: watches typed text for arithmetic expressions.
     MathNotesService.instance.init();
+    // Read aloud: listens for ACTION_PROCESS_TEXT intents ("Read with Nexus").
+    ReadAloudService.instance.init();
     // The dev bridge runs user-configured commands and sends any produced
     // build artifact back over the same encrypted transfer path as files.
     DevBridgeService.instance.init(
@@ -148,6 +152,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     _receivedSub?.cancel();
     _historySub?.cancel();
+    ReadAloudService.instance.dispose();
     _transferService.stop();
     _voskService.dispose();
     _modelService.dispose();
@@ -363,6 +368,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
           ),
         ],
       ),
+      floatingActionButton: const ReadAloudFab(),
     );
   }
 }
