@@ -31,6 +31,9 @@ class NexusAccessibilityService : AccessibilityService() {
         private var instance: NexusAccessibilityService? = null
         private var pendingAction: ((NexusAccessibilityService) -> Unit)? = null
         private var mathNotesEnabled = false
+        // Re-trigger guard: ignores text-change events fired by Nexus's own
+        // auto-insert, so the inserted result is never re-detected (loop safety).
+        private val reTriggerGuard = MathReTriggerGuard()
 
         /** Enable or disable the math-notes text-change listener. */
         fun setMathNotesEnabled(enabled: Boolean) {
@@ -87,7 +90,14 @@ class NexusAccessibilityService : AccessibilityService() {
         // Math notes: listen for text changes in editable fields.
         // SAFEGUARD ORDERING: password/financial checks happen BEFORE
         // any text content is read — this is the privacy guarantee.
-        if (event.eventType == AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED && mathNotesEnabled) {
+        // The suppression-window half of the re-trigger guard drops immediate
+        // text-change events caused by Nexus's own auto-insert (loop
+        // prevention). The dedupe half runs later, inside handleMathNotes,
+        // where the text is already known to be safe to read.
+        if (event.eventType == AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED &&
+            mathNotesEnabled &&
+            !reTriggerGuard.isWithinSuppressionWindow()
+        ) {
             handleMathNotes(event)
         }
     }
@@ -122,14 +132,27 @@ class NexusAccessibilityService : AccessibilityService() {
                 return
             }
 
-            // SAFEGUARD 3: ONLY NOW read the text content.
-            val text = source.text?.toString() ?: return
+            // SAFEGUARD 3: ONLY NOW read the text content. Rich editors (e.g.
+            // Samsung Notes) often deliver the changed text on the EVENT while
+            // the source node's text is null — fall back to the event text.
+            val text = source.text?.toString()
+                ?: event.text?.joinToString("")
+                ?: return
+
+            // Re-trigger guard (layer 2): a delayed event re-delivering the
+            // exact expression Nexus just auto-inserted is ignored, no matter
+            // when it arrives (rich editors can fire stale events seconds
+            // after the insert).
+            if (reTriggerGuard.isDuplicateOfRecentAction(text)) {
+                source.recycle()
+                return
+            }
 
             // Evaluate the math expression directly on the Kotlin side.
             // This avoids a Dart round-trip and keeps the overlay fast.
             val result = evaluateMathExpression(text)
             if (result != null) {
-                showMathOverlay(result, text, source)
+                deliverMathResult(result, text, source)
             }
 
             source.recycle()
@@ -168,113 +191,68 @@ class NexusAccessibilityService : AccessibilityService() {
     /**
      * Evaluates a simple arithmetic expression ending with '='.
      * Returns the formatted result string, or null if not a valid expression.
-     * Uses the same strict regex and evaluator as MathTriggerDetector in Dart.
+     * Uses the same strict regex and evaluator as MathTriggerDetector in Dart
+     * (see [MathExpressionEvaluator]).
      */
-    private fun evaluateMathExpression(text: String): String? {
-        val trimmed = text.trim()
-        if (!trimmed.endsWith("=")) return null
+    private fun evaluateMathExpression(text: String): String? =
+        MathExpressionEvaluator.evaluate(text)
 
-        val expr = trimmed.removeSuffix("=").trim()
-        if (expr.isEmpty()) return null
-
-        // Strict regex: only digits, operators, parens, decimal points, whitespace
-        if (!expr.matches(Regex("^-?(\\d+\\.?\\d*|\\.?\\d+)(\\s*[+\\-*/]\\s*-?(\\d+\\.?\\d*|\\.?\\d+))*$"))) {
-            return null
-        }
-
-        return try {
-            val result = evalArithmetic(expr)
-            if (result.isNaN() || result.isInfinite()) null
-            else if (result == result.toLong().toDouble()) result.toLong().toString()
-            else String.format("%.${minOf(result.toString().split(".").getOrElse(1) { "" }.length.coerceIn(1, 6))}f", result)
-        } catch (_: Exception) {
-            null
-        }
-    }
-
-    // Parser state shared across recursive-descent methods
-    private var _tokens = listOf<String>()
-    private var _pos = 0
-
-    /** Simple recursive-descent arithmetic evaluator (no external eval). */
-    private fun evalArithmetic(expr: String): Double {
-        _tokens = tokenize(expr)
-        _pos = 0
-        val result = parseAddSub()
-        if (_pos < _tokens.size) return Double.NaN
-        return result
-    }
-
-    private fun parseAddSub(): Double {
-        var left = parseMulDiv()
-        while (_pos < _tokens.size && (_tokens[_pos] == "+" || _tokens[_pos] == "-")) {
-            val op = _tokens[_pos++]
-            val right = parseMulDiv()
-            left = if (op == "+") left + right else left - right
-        }
-        return left
-    }
-
-    private fun parseMulDiv(): Double {
-        var left = parseUnary()
-        while (_pos < _tokens.size && (_tokens[_pos] == "*" || _tokens[_pos] == "/")) {
-            val op = _tokens[_pos++]
-            val right = parseUnary()
-            left = if (op == "*") left * right else left / right
-        }
-        return left
-    }
-
-    private fun parseUnary(): Double {
-        if (_pos < _tokens.size && _tokens[_pos] == "-") {
-            _pos++
-            return -parseAtom()
-        }
-        return parseAtom()
-    }
-
-    private fun parseAtom(): Double {
-        if (_pos >= _tokens.size) return 0.0
-        if (_tokens[_pos] == "(") {
-            _pos++
-            val v = parseAddSub()
-            if (_pos < _tokens.size && _tokens[_pos] == ")") _pos++
-            return v
-        }
-        return _tokens[_pos++].toDouble()
-    }
-
-    private fun tokenize(expr: String): List<String> {
-        val tokens = mutableListOf<String>()
-        val buf = StringBuilder()
-        for (c in expr) {
-            if (c == ' ') continue
-            if (c == '+' || c == '-' || c == '*' || c == '/') {
-                if (c == '-' && (tokens.isEmpty() || tokens.last().let { it == "+" || it == "-" || it == "*" || it == "/" })) {
-                    buf.append(c)
-                } else {
-                    if (buf.isNotEmpty()) { tokens.add(buf.toString()); buf.clear() }
-                    tokens.add(c.toString())
-                }
-            } else if (c == '(' || c == ')') {
-                if (buf.isNotEmpty()) { tokens.add(buf.toString()); buf.clear() }
-                tokens.add(c.toString())
-            } else {
-                buf.append(c)
+    /**
+     * Delivers a computed math result, Apple-Math-Notes style — no interaction
+     * required from the user:
+     *  1. If the field supports ACTION_SET_TEXT, auto-insert the result inline
+     *     ("12+8=" becomes "12+8 = 20") the moment it is computed.
+     *  2. Otherwise, copy the result to the clipboard automatically and show a
+     *     brief overlay that dismisses itself after a few seconds — the user
+     *     never has to tap anything to make it go away.
+     *
+     * Only the result value (a number) is logged, never the typed expression.
+     */
+    private fun deliverMathResult(result: String, expression: String, source: AccessibilityNodeInfo) {
+        // Path 1: auto-insert when the field supports it.
+        val supportsDirectInsert = source.isEditable &&
+            source.actionList.any { it.id == AccessibilityNodeInfo.ACTION_SET_TEXT }
+        if (supportsDirectInsert) {
+            val newText = expression.removeSuffix("=").trim() + " = " + result
+            val args = Bundle().apply {
+                putCharSequence(
+                    AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
+                    newText
+                )
+            }
+            // The insert fires TYPE_VIEW_TEXT_CHANGED events; record both the
+            // expression and the full inserted text so the guard suppresses
+            // Nexus's own insert (window + dedupe against fragments) and it is
+            // never re-detected as a new expression.
+            reTriggerGuard.noteInsert(expression, newText)
+            val inserted = source.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+            if (inserted) {
+                Log.d(TAG, "Math notes: result $result delivered via auto-insert")
+                return
             }
         }
-        if (buf.isNotEmpty()) tokens.add(buf.toString())
-        return tokens
+
+        // Path 2: field can't take direct insertion — auto-copy + a brief
+        // overlay that dismisses itself. No tap required for either.
+        copyToClipboard(result)
+        showAutoDismissOverlay(result, source)
+        Log.d(TAG, "Math notes: result $result delivered via clipboard + overlay")
     }
 
-    /** Shows a system overlay with the math result near the text field. */
-    private fun showMathOverlay(result: String, expression: String, source: AccessibilityNodeInfo) {
+    private fun copyToClipboard(result: String) {
+        try {
+            val cm = getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+            cm.setPrimaryClip(android.content.ClipData.newPlainText("math_result", result))
+        } catch (_: Exception) {}
+    }
+
+    /** Shows a small overlay near the field; it dismisses itself after ~4s. */
+    private fun showAutoDismissOverlay(result: String, source: AccessibilityNodeInfo) {
         try {
             val wm = getSystemService(android.content.Context.WINDOW_SERVICE) as android.view.WindowManager
             val bounds = android.graphics.Rect()
             source.getBoundsInScreen(bounds)
 
-            // Position the overlay just below the text field
             val params = android.view.WindowManager.LayoutParams(
                 android.view.WindowManager.LayoutParams.WRAP_CONTENT,
                 android.view.WindowManager.LayoutParams.WRAP_CONTENT,
@@ -293,33 +271,30 @@ class NexusAccessibilityService : AccessibilityService() {
             }
 
             val tv = android.widget.TextView(this).apply {
-                text = "= $result"
+                text = "= $result · copied"
                 setTextColor(android.graphics.Color.parseColor("#1565C0"))
                 textSize = 16f
                 setPadding(24, 12, 24, 12)
                 setBackgroundColor(android.graphics.Color.parseColor("#E3F2FD"))
+                // Tapping just dismisses early; it is never required.
                 setOnClickListener {
-                    val cm = getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                    cm.setPrimaryClip(android.content.ClipData.newPlainText("math_result", result))
-                    wm.removeView(this@apply)
-                    android.widget.Toast.makeText(this@NexusAccessibilityService, "Copied $result", android.widget.Toast.LENGTH_SHORT).show()
+                    try { wm.removeView(this@apply) } catch (_: Exception) {}
                 }
             }
 
             wm.addView(tv, params)
 
-            // Auto-remove after 4 seconds
+            // Auto-dismiss after ~4 seconds — the user never has to interact.
             android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
                 try { wm.removeView(tv) } catch (_: Exception) {}
             }, 4000)
         } catch (e: Exception) {
-            // "Display over other apps" not granted: fall back to a Toast so the
-            // result is never silently dropped. The Settings screen guides the
-            // user to grant overlay permission.
+            // "Display over other apps" not granted: fall back to a Toast (which
+            // dismisses itself too) so the result is never silently dropped.
             try {
                 android.widget.Toast.makeText(
                     this,
-                    "= $result — enable \"Display over other apps\" in Nexus Settings to see results inline",
+                    "= $result · copied",
                     android.widget.Toast.LENGTH_LONG
                 ).show()
             } catch (_: Exception) {}
