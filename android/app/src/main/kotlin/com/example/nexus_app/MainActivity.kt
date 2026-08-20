@@ -10,7 +10,9 @@ class MainActivity : FlutterActivity() {
 
     companion object {
         private const val CHANNEL = "com.example.nexus_app/accessibility"
+        private const val MATH_NOTES_CHANNEL = "com.example.nexus_app/math_notes"
         var channel: MethodChannel? = null
+        var mathNotesChannel: MethodChannel? = null
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -82,9 +84,112 @@ class MainActivity : FlutterActivity() {
                         result.error("SERVICE_NOT_RUNNING", "Accessibility service is not enabled", null)
                     }
                 }
+                "getInstalledApps" -> {
+                    try {
+                        val pm = packageManager
+                        val intent = android.content.Intent(android.content.Intent.ACTION_MAIN).apply {
+                            addCategory(android.content.Intent.CATEGORY_LAUNCHER)
+                        }
+                        val resolveInfos = pm.queryIntentActivities(intent, 0)
+                        val apps = resolveInfos.mapNotNull { ri ->
+                            try {
+                                val appInfo = ri.activityInfo.applicationInfo
+                                val label = ri.loadLabel(pm).toString()
+                                val icon = try {
+                                    val drawable = ri.loadIcon(pm)
+                                    val bitmap = if (drawable is android.graphics.drawable.BitmapDrawable) {
+                                        drawable.bitmap
+                                    } else {
+                                        val bmp = android.graphics.Bitmap.createBitmap(
+                                            drawable.intrinsicWidth.coerceAtLeast(1),
+                                            drawable.intrinsicHeight.coerceAtLeast(1),
+                                            android.graphics.Bitmap.Config.ARGB_8888
+                                        )
+                                        val canvas = android.graphics.Canvas(bmp)
+                                        drawable.setBounds(0, 0, canvas.width, canvas.height)
+                                        drawable.draw(canvas)
+                                        bmp
+                                    }
+                                    val stream = java.io.ByteArrayOutputStream()
+                                    bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 80, stream)
+                                    stream.toByteArray()
+                                } catch (_: Exception) { null }
+                                mapOf(
+                                    "packageName" to appInfo.packageName,
+                                    "name" to label,
+                                    "icon" to icon
+                                )
+                            } catch (_: Exception) { null }
+                        }.sortedBy { it["name"] as? String }
+                        result.success(apps)
+                    } catch (e: Exception) {
+                        result.error("FAILED", e.message, null)
+                    }
+                }
+                "setMathNotesEnabled" -> {
+                    val enabled = call.argument<Boolean>("enabled") ?: false
+                    NexusAccessibilityService.setMathNotesEnabled(enabled)
+                    result.success(true)
+                }
+                "insertText" -> {
+                    val text = call.argument<String>("text") ?: ""
+                    val svc = NexusAccessibilityService::class.java.let {
+                        try {
+                            val field = it.getDeclaredField("instance")
+                            field.isAccessible = true
+                            field.get(null) as? NexusAccessibilityService
+                        } catch (e: Exception) { null }
+                    }
+                    if (svc != null) {
+                        // Find the focused editable node and set its text
+                        val root = svc.rootInActiveWindow
+                        if (root != null) {
+                            val focused = findFocusedEditable(root)
+                            if (focused != null) {
+                                val args = android.os.Bundle().apply {
+                                    putCharSequence(
+                                        android.view.accessibility.AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
+                                        text
+                                    )
+                                }
+                                val success = focused.performAction(
+                                    android.view.accessibility.AccessibilityNodeInfo.ACTION_SET_TEXT,
+                                    args
+                                )
+                                focused.recycle()
+                                root.recycle()
+                                result.success(success)
+                            } else {
+                                root.recycle()
+                                result.success(false)
+                            }
+                        } else {
+                            result.success(false)
+                        }
+                    } else {
+                        result.error("SERVICE_NOT_RUNNING", "Accessibility service is not enabled", null)
+                    }
+                }
                 else -> result.notImplemented()
             }
         }
+
+        // Math notes channel: receives text-change events from the accessibility service
+        mathNotesChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, MATH_NOTES_CHANNEL)
+    }
+
+    private fun findFocusedEditable(node: android.view.accessibility.AccessibilityNodeInfo): android.view.accessibility.AccessibilityNodeInfo? {
+        if (node.isFocused && node.isEditable) return node
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            try {
+                val found = findFocusedEditable(child)
+                if (found != null) return found
+            } finally {
+                child.recycle()
+            }
+        }
+        return null
     }
 
     private fun isAccessibilityServiceEnabled(): Boolean {

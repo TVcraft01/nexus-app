@@ -17,6 +17,8 @@
          protection-level permission: a manifest declaration is enough, no
          runtime prompt. -->
     <uses-permission android:name="com.android.alarm.permission.SET_ALARM"/>
+    <!-- System overlay for the math-notes floating result display. -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
 
     <application
         android:label="Nexus"

@@ -9,6 +9,8 @@ class SettingsService {
   static const _devTaskCommandKey = 'nexus_dev_task_command';
   static const _devTaskCwdKey = 'nexus_dev_task_cwd';
   static const _assistAppKey = 'nexus_assist_app';
+  static const _assistAppAllowedKey = 'nexus_assist_app_allowed';
+  static const _mathNotesKey = 'nexus_math_notes_enabled';
 
   /// Default command shown on a device that enables "Allow remote dev tasks"
   /// before configuring anything. It exists so a request never runs against
@@ -97,5 +99,52 @@ class SettingsService {
   Future<void> setAssistApp(bool value) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_assistAppKey, value);
+  }
+
+  // ---- Per-app allowlist for assistApp -------------------------------
+
+  /// Returns the set of package names the user has explicitly allowed
+  /// Nexus to interact with. Empty by default — every app starts blocked.
+  Future<Set<String>> getAllowedApps() async {
+    final prefs = await SharedPreferences.getInstance();
+    final list = prefs.getStringList(_assistAppAllowedKey);
+    return list?.toSet() ?? {};
+  }
+
+  /// Adds a package name to the allowlist.
+  Future<void> allowApp(String packageName) async {
+    final prefs = await SharedPreferences.getInstance();
+    final current = await getAllowedApps();
+    current.add(packageName);
+    await prefs.setStringList(_assistAppAllowedKey, current.toList());
+  }
+
+  /// Removes a package name from the allowlist.
+  Future<void> disallowApp(String packageName) async {
+    final prefs = await SharedPreferences.getInstance();
+    final current = await getAllowedApps();
+    current.remove(packageName);
+    await prefs.setStringList(_assistAppAllowedKey, current.toList());
+  }
+
+  /// Returns true if [packageName] is on the allowlist.
+  Future<bool> isAppAllowed(String packageName) async {
+    final allowed = await getAllowedApps();
+    return allowed.contains(packageName);
+  }
+
+  // ---- Math notes (inline arithmetic) ---------------------------------
+
+  /// Whether Nexus watches typed text across other apps for simple arithmetic
+  /// expressions (e.g. "12+8=") and shows the result inline. Default OFF.
+  /// Requires both this toggle AND the OS-level accessibility service.
+  Future<bool> getMathNotes() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_mathNotesKey) ?? false;
+  }
+
+  Future<void> setMathNotes(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_mathNotesKey, value);
   }
 }

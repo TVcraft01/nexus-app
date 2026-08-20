@@ -30,6 +30,12 @@ class NexusAccessibilityService : AccessibilityService() {
         private const val TAG = "NexusA11y"
         private var instance: NexusAccessibilityService? = null
         private var pendingAction: ((NexusAccessibilityService) -> Unit)? = null
+        private var mathNotesEnabled = false
+
+        /** Enable or disable the math-notes text-change listener. */
+        fun setMathNotesEnabled(enabled: Boolean) {
+            mathNotesEnabled = enabled
+        }
 
         /** Returns true if the accessibility service is currently connected. */
         fun isRunning(): Boolean = instance != null
@@ -76,8 +82,239 @@ class NexusAccessibilityService : AccessibilityService() {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        // We don't monitor events passively — screen reading happens only
-        // when the user explicitly asks Nexus to do something.
+        if (event == null) return
+
+        // Math notes: listen for text changes in editable fields.
+        // SAFEGUARD ORDERING: password/financial checks happen BEFORE
+        // any text content is read — this is the privacy guarantee.
+        if (event.eventType == AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED && mathNotesEnabled) {
+            handleMathNotes(event)
+        }
+    }
+
+    /**
+     * Handles the math-notes feature: checks text for arithmetic expressions.
+     *
+     * SAFEGUARD ORDERING (privacy guarantee):
+     *  1. Check if the node is a password/secure field → bail immediately
+     *  2. Check if the app is a financial app → bail immediately
+     *  3. ONLY THEN read the text content
+     *  4. Only then check for math patterns
+     *
+     * Text content is never read for excluded fields/apps.
+     */
+    private fun handleMathNotes(event: AccessibilityEvent) {
+        try {
+            val source = event.source ?: return
+
+            // SAFEGUARD 1: Skip password/secure text fields.
+            // isPassword is checked BEFORE any text is read.
+            if (source.isPassword) {
+                source.recycle()
+                return
+            }
+
+            // SAFEGUARD 2: Skip financial/banking apps.
+            // Package name is checked BEFORE any text is read.
+            val packageName = event.packageName?.toString() ?: ""
+            if (isFinancialPackage(packageName)) {
+                source.recycle()
+                return
+            }
+
+            // SAFEGUARD 3: ONLY NOW read the text content.
+            val text = source.text?.toString() ?: return
+
+            // Evaluate the math expression directly on the Kotlin side.
+            // This avoids a Dart round-trip and keeps the overlay fast.
+            val result = evaluateMathExpression(text)
+            if (result != null) {
+                showMathOverlay(result, text, source)
+            }
+
+            source.recycle()
+        } catch (e: Exception) {
+            // Math notes is best-effort; never crash the accessibility service
+        }
+    }
+
+    /**
+     * Known financial/banking/payment package prefixes.
+     * Matches the same list used in AccessibilityService.dart looksFinancial().
+     */
+    private fun isFinancialPackage(packageName: String): Boolean {
+        val lower = packageName.lowercase()
+        val prefixes = listOf(
+            "com.paypal.", "com.venmo", "com.squareup.cash", "com.zelle.",
+            "com.bankofamerica.", "com.chase.", "com.wellsfargo.", "com.citi.",
+            "com.usaa.", "com.capitalone.", "com.discover.", "com.americanexpress.",
+            "com.goldmansachs.", "com.schwab.", "com.fidelity.", "com.vanguard.",
+            "com.robinhood.", "com.coinbase.", "com.kraken.", "com.binance.",
+            "com.block.", "com.revolut.", "com.monzo.", "com.n26.",
+            "com.starling.", "com.td.", "com.rbc.", "com.scotiabank.",
+            "com.bmo.", "com.nationwide.", "com.barclays.", "com.hsbc.",
+            "com.lloyds.", "com.natwest.", "com.santander.", "com.bbva.",
+            "com.deutschebank.", "com.db.", "com.ing.", "com.abnamro.",
+            "com.postfinance.", "com.ubs.", "com.credit.suisse.",
+            "com.westpac.", "com.commbank.", "com.anz.", "com.nab.",
+        )
+        return prefixes.any { lower.startsWith(it) }
+    }
+
+    // -----------------------------------------------------------------------
+    // Math notes: expression evaluation and overlay
+    // -----------------------------------------------------------------------
+
+    /**
+     * Evaluates a simple arithmetic expression ending with '='.
+     * Returns the formatted result string, or null if not a valid expression.
+     * Uses the same strict regex and evaluator as MathTriggerDetector in Dart.
+     */
+    private fun evaluateMathExpression(text: String): String? {
+        val trimmed = text.trim()
+        if (!trimmed.endsWith("=")) return null
+
+        val expr = trimmed.removeSuffix("=").trim()
+        if (expr.isEmpty()) return null
+
+        // Strict regex: only digits, operators, parens, decimal points, whitespace
+        if (!expr.matches(Regex("^-?(\\d+\\.?\\d*|\\.?\\d+)(\\s*[+\\-*/]\\s*-?(\\d+\\.?\\d*|\\.?\\d+))*$"))) {
+            return null
+        }
+
+        return try {
+            val result = evalArithmetic(expr)
+            if (result.isNaN() || result.isInfinite()) null
+            else if (result == result.toLong().toDouble()) result.toLong().toString()
+            else String.format("%.${minOf(result.toString().split(".").getOrElse(1) { "" }.length.coerceIn(1, 6))}f", result)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    // Parser state shared across recursive-descent methods
+    private var _tokens = listOf<String>()
+    private var _pos = 0
+
+    /** Simple recursive-descent arithmetic evaluator (no external eval). */
+    private fun evalArithmetic(expr: String): Double {
+        _tokens = tokenize(expr)
+        _pos = 0
+        val result = parseAddSub()
+        if (_pos < _tokens.size) return Double.NaN
+        return result
+    }
+
+    private fun parseAddSub(): Double {
+        var left = parseMulDiv()
+        while (_pos < _tokens.size && (_tokens[_pos] == "+" || _tokens[_pos] == "-")) {
+            val op = _tokens[_pos++]
+            val right = parseMulDiv()
+            left = if (op == "+") left + right else left - right
+        }
+        return left
+    }
+
+    private fun parseMulDiv(): Double {
+        var left = parseUnary()
+        while (_pos < _tokens.size && (_tokens[_pos] == "*" || _tokens[_pos] == "/")) {
+            val op = _tokens[_pos++]
+            val right = parseUnary()
+            left = if (op == "*") left * right else left / right
+        }
+        return left
+    }
+
+    private fun parseUnary(): Double {
+        if (_pos < _tokens.size && _tokens[_pos] == "-") {
+            _pos++
+            return -parseAtom()
+        }
+        return parseAtom()
+    }
+
+    private fun parseAtom(): Double {
+        if (_pos >= _tokens.size) return 0.0
+        if (_tokens[_pos] == "(") {
+            _pos++
+            val v = parseAddSub()
+            if (_pos < _tokens.size && _tokens[_pos] == ")") _pos++
+            return v
+        }
+        return _tokens[_pos++].toDouble()
+    }
+
+    private fun tokenize(expr: String): List<String> {
+        val tokens = mutableListOf<String>()
+        val buf = StringBuilder()
+        for (c in expr) {
+            if (c == ' ') continue
+            if (c == '+' || c == '-' || c == '*' || c == '/') {
+                if (c == '-' && (tokens.isEmpty() || tokens.last().let { it == "+" || it == "-" || it == "*" || it == "/" })) {
+                    buf.append(c)
+                } else {
+                    if (buf.isNotEmpty()) { tokens.add(buf.toString()); buf.clear() }
+                    tokens.add(c.toString())
+                }
+            } else if (c == '(' || c == ')') {
+                if (buf.isNotEmpty()) { tokens.add(buf.toString()); buf.clear() }
+                tokens.add(c.toString())
+            } else {
+                buf.append(c)
+            }
+        }
+        if (buf.isNotEmpty()) tokens.add(buf.toString())
+        return tokens
+    }
+
+    /** Shows a system overlay with the math result near the text field. */
+    private fun showMathOverlay(result: String, expression: String, source: AccessibilityNodeInfo) {
+        try {
+            val wm = getSystemService(android.content.Context.WINDOW_SERVICE) as android.view.WindowManager
+            val bounds = android.graphics.Rect()
+            source.getBoundsInScreen(bounds)
+
+            // Position the overlay just below the text field
+            val params = android.view.WindowManager.LayoutParams(
+                android.view.WindowManager.LayoutParams.WRAP_CONTENT,
+                android.view.WindowManager.LayoutParams.WRAP_CONTENT,
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O)
+                    android.view.WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                else
+                    @Suppress("DEPRECATION")
+                    android.view.WindowManager.LayoutParams.TYPE_PHONE,
+                android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    android.view.WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+                android.graphics.PixelFormat.TRANSLUCENT
+            ).apply {
+                gravity = android.view.Gravity.TOP or android.view.Gravity.START
+                x = bounds.left
+                y = bounds.bottom + 8
+            }
+
+            val tv = android.widget.TextView(this).apply {
+                text = "= $result"
+                setTextColor(android.graphics.Color.parseColor("#1565C0"))
+                textSize = 16f
+                setPadding(24, 12, 24, 12)
+                setBackgroundColor(android.graphics.Color.parseColor("#E3F2FD"))
+                setOnClickListener {
+                    val cm = getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                    cm.setPrimaryClip(android.content.ClipData.newPlainText("math_result", result))
+                    wm.removeView(this@apply)
+                    android.widget.Toast.makeText(this@NexusAccessibilityService, "Copied $result", android.widget.Toast.LENGTH_SHORT).show()
+                }
+            }
+
+            wm.addView(tv, params)
+
+            // Auto-remove after 4 seconds
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                try { wm.removeView(tv) } catch (_: Exception) {}
+            }, 4000)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to show math overlay", e)
+        }
     }
 
     override fun onInterrupt() {

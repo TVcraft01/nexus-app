@@ -26,6 +26,7 @@ import 'tasks/task_worker.dart';
 import 'transfer/files_screen.dart';
 import 'transfer/send_file_screen.dart';
 import 'transfer/transfer_service.dart';
+import 'math_notes/math_notes_service.dart';
 
 void main() {
   voskQuiet(); // silence Vosk's stderr logging on the C side.
@@ -83,6 +84,8 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     );
     KnowledgeStore.instance.init();
     ActionRegistry.instance.init();
+    // Math notes: watches typed text for arithmetic expressions.
+    MathNotesService.instance.init();
     // The dev bridge runs user-configured commands and sends any produced
     // build artifact back over the same encrypted transfer path as files.
     DevBridgeService.instance.init(

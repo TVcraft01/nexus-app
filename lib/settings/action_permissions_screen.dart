@@ -6,6 +6,8 @@ import 'package:flutter/material.dart';
 import '../accessibility/accessibility_service.dart';
 import '../ai/action_registry.dart';
 import '../ai/nexus_brain.dart';
+import '../math_notes/math_notes_service.dart';
+import 'app_list_screen.dart';
 import 'settings_service.dart';
 
 /// This app's applicationId (see android/app/build.gradle.kts). Used to deep
@@ -154,6 +156,9 @@ class ActionPermissionsScreen extends StatelessWidget {
               _sectionHeader(context, 'Assist with other apps'),
               _buildAssistAppSection(context),
               const Divider(),
+              _sectionHeader(context, 'Math notes'),
+              _buildMathNotesSection(context),
+              const Divider(),
               _sectionHeader(context, 'System permissions'),
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
@@ -187,6 +192,11 @@ class ActionPermissionsScreen extends StatelessWidget {
   Widget _buildAssistAppSection(BuildContext context) {
     final settings = SettingsService();
     return _AssistAppToggle(settings: settings);
+  }
+
+  Widget _buildMathNotesSection(BuildContext context) {
+    final settings = SettingsService();
+    return _MathNotesToggle(settings: settings);
   }
 }
 
@@ -314,6 +324,26 @@ class _AssistAppToggleState extends State<_AssistAppToggle> {
                         color: Theme.of(context).colorScheme.onSurfaceVariant,
                       ),
                 ),
+                const SizedBox(height: 8),
+                OutlinedButton.icon(
+                  onPressed: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => const AppListScreen(),
+                      ),
+                    );
+                  },
+                  icon: const Icon(Icons.app_registration, size: 18),
+                  label: const Text('Manage app permissions'),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Choose which specific apps Nexus is allowed to interact '
+                  'with. Every app is blocked by default.',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                ),
               ],
             ),
           ),
@@ -329,5 +359,48 @@ class _AssistAppToggleState extends State<_AssistAppToggle> {
         _osEnabled = AccessibilityService.instance.serviceRunning.value;
       });
     }
+  }
+}
+
+/// Toggle for the "Math notes" feature — watches typed text for arithmetic
+/// and shows inline results. Separate from the assist-app toggle.
+class _MathNotesToggle extends StatefulWidget {
+  final SettingsService settings;
+  const _MathNotesToggle({required this.settings});
+  @override
+  State<_MathNotesToggle> createState() => _MathNotesToggleState();
+}
+
+class _MathNotesToggleState extends State<_MathNotesToggle> {
+  bool? _enabled;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final enabled = await widget.settings.getMathNotes();
+    if (mounted) setState(() => _enabled = enabled);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_enabled == null) return const SizedBox.shrink();
+    return SwitchListTile(
+      secondary: const Icon(Icons.calculate_outlined),
+      title: const Text('Math notes'),
+      subtitle: const Text(
+          'When you type a simple arithmetic expression ending with = '
+          '(like 12+8=), Nexus shows the result inline. Password fields '
+          'and financial apps are always skipped. Off by default.'),
+      value: _enabled!,
+      onChanged: (v) async {
+        await widget.settings.setMathNotes(v);
+        await MathNotesService.instance.setEnabled(v);
+        if (mounted) setState(() => _enabled = v);
+      },
+    );
   }
 }

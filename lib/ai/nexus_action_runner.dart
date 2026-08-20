@@ -11,6 +11,7 @@ import 'package:path_provider/path_provider.dart';
 
 import '../accessibility/accessibility_service.dart';
 import '../models/paired_device.dart';
+import '../settings/settings_service.dart';
 import '../sync/knowledge_store.dart';
 import 'action_registry.dart';
 import 'nexus_brain.dart';
@@ -558,6 +559,10 @@ class NexusActionRunner {
   // Assist with other apps (accessibility service)
   // -----------------------------------------------------------------------
 
+  // -----------------------------------------------------------------------
+  // Assist with other apps (accessibility service)
+  // -----------------------------------------------------------------------
+
   Future<String> _assistApp(NexusAction action) async {
     // Guard: only works on Android
     if (!Platform.isAndroid) {
@@ -574,17 +579,43 @@ class NexusActionRunner {
     final a11y = AccessibilityService.instance;
     if (!a11y.serviceRunning.value) {
       return 'Nexus needs the Accessibility service to read the screen. '
-          'Enable it in Settings → Actions & permissions → Assist with other '
+          'Enable it in Settings \u2192 Actions & permissions \u2192 Assist with other '
           'apps, then turn on the system accessibility toggle for Nexus.';
     }
 
-    // Read the screen tree
+    // Read the screen tree (needed to determine the foreground app)
     final screenTree = await a11y.getScreenTree();
     if (screenTree == null) {
       return 'I couldn\'t read the current screen. Make sure another app is '
           'open in the foreground.';
     }
-    // Parse the screen tree and find the best-matching element
+
+    // Guard: check per-app allowlist \u2014 the foreground app must be explicitly
+    // approved by the user. looksFinancial() is an EXTRA safety net underneath.
+    String targetPackage = packageName;
+    if (targetPackage.isEmpty) {
+      // Infer from the screen tree's foreground package
+      try {
+        final parsed = jsonDecode(screenTree) as Map<String, dynamic>;
+        targetPackage = (parsed['packageName'] as String?) ?? '';
+      } catch (_) {}
+    }
+    if (targetPackage.isNotEmpty) {
+      final settings = SettingsService();
+      final allowed = await settings.isAppAllowed(targetPackage);
+      if (!allowed) {
+        return 'I\'m not allowed to interact with $targetPackage yet. '
+            'Enable it in Settings \u2192 Actions & permissions \u2192 Assist with '
+            'other apps \u2192 Manage app permissions first.';
+      }
+      // Belt and suspenders: also check the financial heuristic
+      if (AccessibilityService.looksFinancial(targetPackage)) {
+        return 'I won\'t interact with $targetPackage \u2014 it appears to be a '
+            'financial app, and Nexus avoids those for safety.';
+      }
+    }
+
+    // Now parse the screen tree and find the best-matching element
     final plan = _matchElement(
       screenTree: screenTree,
       actionType: actionType,
@@ -595,20 +626,20 @@ class NexusActionRunner {
 
     if (plan == null) {
       return 'I couldn\'t find "$elementDesc" on the current screen. '
-          'Try describing it differently — for example "the Send button" or '
+          'Try describing it differently \u2014 for example "the Send button" or '
           '"the search field".';
     }
 
     // Confirmation: show the user exactly what will happen and require
-    // explicit approval. This is the ONLY way to execute — no bypass.
+    // explicit approval. This is the ONLY way to execute \u2014 no bypass.
     final confirm = _confirmAction;
     if (confirm != null) {
       final approved = await confirm(plan);
       if (!approved) {
-        return 'Cancelled — no action taken.';
+        return 'Cancelled \u2014 no action taken.';
       }
     } else {
-      // No confirmation callback available (e.g. headless/test mode) —
+      // No confirmation callback available (e.g. headless/test mode) \u2014
       // refuse to act rather than skip the safety gate.
       return 'Confirmation is required but unavailable right now. '
           'Please try again from the Talk screen.';
@@ -633,13 +664,10 @@ class NexusActionRunner {
       final verb = actionType == 'type' ? 'Typed into' : 'Tapped';
       return '$verb "${plan.description}" successfully.';
     }
-    return 'The action didn\'t complete — the element may have moved or '
+    return 'The action didn\'t complete \u2014 the element may have moved or '
         'the screen changed. Try again.';
   }
 
-  /// Matches the LLM's description of what to interact with against the
-  /// screen tree elements. Returns an [AssistAppPlan] if a match is found,
-  /// or null if nothing matches.
   AssistAppPlan? _matchElement({
     required String screenTree,
     required String actionType,
