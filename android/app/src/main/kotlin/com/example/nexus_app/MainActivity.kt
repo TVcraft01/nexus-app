@@ -37,6 +37,10 @@ class MainActivity : FlutterActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
+        // Currency rates for the math-notes conversion (cached + refreshed).
+        CurrencyRates.initialize(this)
+        CurrencyRates.refresh()
+
         channel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL)
         channel?.setMethodCallHandler { call, result ->
             when (call.method) {

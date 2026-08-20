@@ -405,9 +405,12 @@ class _MathNotesToggleState extends State<_MathNotesToggle> {
           secondary: const Icon(Icons.calculate_outlined),
           title: const Text('Math notes'),
           subtitle: const Text(
-              'When you type a simple arithmetic expression ending with = '
-              '(like 12+8=), Nexus shows the result inline. Password fields '
-              'and financial apps are always skipped. Off by default.'),
+              'When you type a simple expression ending with = (like 12+8=), '
+              'Nexus shows the result in a small popup and, if you pause for '
+              'a moment, writes it into the field for you — typing or '
+              'deleting during the pause cancels it. Works with ÷ × x, ²/^ '
+              'and %, plus conversions like 10€ in \$ =. Password fields and '
+              'financial apps are always skipped. Off by default.'),
           value: _enabled!,
           onChanged: _onToggle,
         ),
@@ -425,8 +428,9 @@ class _MathNotesToggleState extends State<_MathNotesToggle> {
                       SizedBox(width: 8),
                       Expanded(
                         child: Text(
-                          'Results will appear as a floating overlay on top '
-                          'of other apps.',
+                          'Results will appear in a small popup on top of '
+                          'other apps, then get written into the field after '
+                          'a short pause.',
                           style: TextStyle(fontSize: 12),
                         ),
                       ),

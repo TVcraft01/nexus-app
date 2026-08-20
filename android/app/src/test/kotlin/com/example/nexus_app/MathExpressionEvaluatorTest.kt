@@ -1,7 +1,9 @@
 package com.example.nexus_app
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -14,97 +16,231 @@ import org.junit.Test
  */
 class MathExpressionEvaluatorTest {
 
+    private fun eval(text: String): String? =
+        MathExpressionEvaluator.evaluate(text)?.formatted
+
+    // ---- basic arithmetic --------------------------------------------------
+
     @Test
     fun addition() {
-        assertEquals("20", MathExpressionEvaluator.evaluate("12+8="))
+        assertEquals("20", eval("12+8="))
     }
 
     @Test
     fun subtraction() {
         // Regression: binary minus as the FIRST operator crashed the parse.
-        assertEquals("5", MathExpressionEvaluator.evaluate("9-4="))
-        assertEquals("13", MathExpressionEvaluator.evaluate("12-(-1)="))
+        assertEquals("5", eval("9-4="))
+        assertEquals("13", eval("12-(-1)="))
     }
 
     @Test
     fun multiplication() {
-        assertEquals("42", MathExpressionEvaluator.evaluate("6*7="))
+        assertEquals("42", eval("6*7="))
     }
 
     @Test
     fun division() {
-        assertEquals("3", MathExpressionEvaluator.evaluate("9/3="))
-        assertEquals("2.5", MathExpressionEvaluator.evaluate("5/2="))
+        assertEquals("3", eval("9/3="))
+        assertEquals("2.5", eval("5/2="))
     }
 
     @Test
     fun operatorPrecedence() {
-        // Multiplication binds tighter than addition.
-        assertEquals("14", MathExpressionEvaluator.evaluate("2+3*4="))
-        assertEquals("20", MathExpressionEvaluator.evaluate("(2+3)*4="))
+        assertEquals("14", eval("2+3*4="))
+        assertEquals("20", eval("(2+3)*4="))
     }
 
     @Test
     fun parentheses() {
-        assertEquals("20", MathExpressionEvaluator.evaluate("(2+3)*4="))
-        assertEquals("35", MathExpressionEvaluator.evaluate("(2+5)*(3+2)="))
+        assertEquals("20", eval("(2+3)*4="))
+        assertEquals("35", eval("(2+5)*(3+2)="))
     }
 
     @Test
     fun unaryMinus() {
-        assertEquals("-3", MathExpressionEvaluator.evaluate("-3="))
-        assertEquals("-3", MathExpressionEvaluator.evaluate("0-3="))
+        assertEquals("-3", eval("-3="))
+        assertEquals("-3", eval("0-3="))
     }
 
     @Test
     fun decimals() {
-        assertEquals("1.5", MathExpressionEvaluator.evaluate("0.5+1="))
-        assertEquals("2.5", MathExpressionEvaluator.evaluate("1.25*2="))
+        assertEquals("1.5", eval("0.5+1="))
+        assertEquals("2.5", eval("1.25*2="))
     }
 
     @Test
     fun whitespaceIsAllowed() {
-        assertEquals("20", MathExpressionEvaluator.evaluate(" 12 + 8 = "))
-        assertEquals("14", MathExpressionEvaluator.evaluate("2 + 3 * 4="))
+        assertEquals("20", eval(" 12 + 8 = "))
+        assertEquals("14", eval("2 + 3 * 4="))
+    }
+
+    // ---- user-friendly symbols ---------------------------------------------
+
+    @Test
+    fun divisionSignWorks() {
+        assertEquals("5", eval("10÷2="))
+        assertEquals("3", eval("12÷4="))
     }
 
     @Test
+    fun timesSignWorks() {
+        assertEquals("42", eval("6×7="))
+    }
+
+    @Test
+    fun xAsMultiplicationWorks() {
+        assertEquals("6", eval("2x3="))
+        assertEquals("24", eval("2x3x4="))
+    }
+
+    // ---- exponentiation ------------------------------------------------------
+
+    @Test
+    fun caretExponent() {
+        assertEquals("8", eval("2^3="))
+        assertEquals("1", eval("2^0="))
+        assertEquals("0.5", eval("2^-1="))
+    }
+
+    @Test
+    fun superscriptExponent() {
+        assertEquals("4", eval("2²="))
+        assertEquals("9", eval("3²="))
+        assertEquals("8", eval("2³="))
+    }
+
+    @Test
+    fun exponentPrecedence() {
+        // The unary minus is folded into the base (like a phone calculator):
+        // -2^2 = (-2)^2 = 4.
+        assertEquals("4", eval("-2^2=" ))
+        // A binary minus applies AFTER the exponent: 0-2^2 = 0-4 = -4.
+        assertEquals("-4", eval("0-2^2=" ))
+        // Right-associative: 2^3^2 = 2^(3^2) = 512.
+        assertEquals("512", eval("2^3^2=" ))
+    }
+
+    // ---- percent -------------------------------------------------------------
+
+    @Test
+    fun percentIsPostfix() {
+        assertEquals("0.5", eval("50%="))
+        assertEquals("20", eval("200*10%="))
+        assertEquals("0.6", eval("50%+10%="))
+    }
+
+    // ---- rejections -----------------------------------------------------------
+
+    @Test
     fun divisionByZeroIsRejected() {
-        assertNull(MathExpressionEvaluator.evaluate("1/0="))
+        assertNull(eval("1/0="))
     }
 
     @Test
     fun missingEqualsIsRejected() {
-        assertNull(MathExpressionEvaluator.evaluate("12+8"))
+        assertNull(eval("12+8"))
     }
 
     @Test
     fun lettersAreRejected() {
-        assertNull(MathExpressionEvaluator.evaluate("12+a="))
-        assertNull(MathExpressionEvaluator.evaluate("abc="))
+        assertNull(eval("12+a="))
+        assertNull(eval("abc="))
     }
 
     @Test
     fun emptyExpressionIsRejected() {
-        assertNull(MathExpressionEvaluator.evaluate("="))
-        assertNull(MathExpressionEvaluator.evaluate(""))
+        assertNull(eval("="))
+        assertNull(eval(""))
     }
 
     @Test
     fun trailingOperatorIsRejected() {
-        assertNull(MathExpressionEvaluator.evaluate("12+="))
-        assertNull(MathExpressionEvaluator.evaluate("12*="))
-    }
-
-    @Test
-    fun divisionSignIsRejected() {
-        // The ÷ symbol is outside the strict grammar.
-        assertNull(MathExpressionEvaluator.evaluate("10÷2="))
+        assertNull(eval("12+="))
+        assertNull(eval("12*="))
+        assertNull(eval("2x="))
+        assertNull(eval("2^="))
     }
 
     @Test
     fun functionCallsAreRejected() {
-        assertNull(MathExpressionEvaluator.evaluate("sin(0)="))
-        assertNull(MathExpressionEvaluator.evaluate("2^3="))
+        assertNull(eval("sin(0)="))
+    }
+
+    @Test
+    fun percentWithoutOperandIsRejected() {
+        assertNull(eval("%="))
+        assertNull(eval("2%3=")) // % is postfix-only in this narrow grammar
+    }
+
+    // ---- currency conversion ---------------------------------------------------
+
+    private val testRates: (String) -> Double? = { sym ->
+        when (sym) {
+            "€" -> 1.0
+            "$" -> 1.087
+            "£" -> 0.85
+            "¥" -> 163.0
+            else -> null
+        }
+    }
+
+    @Test
+    fun currencyInForm() {
+        val r = MathExpressionEvaluator.evaluate("10€ in $ =", testRates)
+        assertNotNull(r)
+        assertTrue(r!!.isConversion)
+        assertEquals("10.87 $", r.formatted)
+        assertEquals("10 €", r.expression)
+        assertEquals("€", r.fromSymbol)
+        assertEquals("$", r.toSymbol)
+    }
+
+    @Test
+    fun currencyEqualsForm() {
+        val r = MathExpressionEvaluator.evaluate("10€=$", testRates)
+        assertNotNull(r)
+        assertEquals("10.87 $", r!!.formatted)
+    }
+
+    @Test
+    fun currencyReverse() {
+        val r = MathExpressionEvaluator.evaluate("10$ in € =", testRates)
+        assertNotNull(r)
+        assertEquals("9.20 €", r!!.formatted)
+    }
+
+    @Test
+    fun currencyWithSpaces() {
+        val r = MathExpressionEvaluator.evaluate(" 10 € in $ = ", testRates)
+        assertNotNull(r)
+        assertEquals("10.87 $", r!!.formatted)
+    }
+
+    @Test
+    fun currencyWithoutEqualsSign() {
+        val r = MathExpressionEvaluator.evaluate("10€ in $", testRates)
+        assertNotNull(r)
+        assertEquals("10.87 $", r!!.formatted)
+    }
+
+    @Test
+    fun currencyRatesMissingIsReportedHonestly() {
+        val r = MathExpressionEvaluator.evaluate("10€ in $ =") { null }
+        assertNotNull(r)
+        assertNotNull(r!!.unavailableReason)
+    }
+
+    @Test
+    fun currencyGarbageIsRejected() {
+        assertNull(MathExpressionEvaluator.evaluate("10€", testRates))
+        assertNull(MathExpressionEvaluator.evaluate("10€ in =", testRates))
+        assertNull(MathExpressionEvaluator.evaluate("hello 10€ in $", testRates))
+        assertNull(MathExpressionEvaluator.evaluate("10€ in $ in € =", testRates))
+    }
+
+    @Test
+    fun plainArithmeticWithCurrencySymbolIsNotConverted() {
+        // A currency symbol present but not in conversion form → rejected.
+        assertNull(MathExpressionEvaluator.evaluate("2+€=", testRates))
     }
 }

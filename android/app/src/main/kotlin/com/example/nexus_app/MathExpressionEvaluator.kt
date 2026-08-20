@@ -1,45 +1,96 @@
 package com.example.nexus_app
 
 /**
- * Evaluates a simple arithmetic expression (numbers, + - * /, parentheses,
- * decimal points) — no general expression evaluation, no function calls, no
- * variables. This is the exact same narrow grammar used by MathTriggerDetector
- * on the Dart side.
+ * Evaluates a simple arithmetic expression — numbers, + - * /, parentheses,
+ * decimal points, exponentiation (^, ², ³), percent (%) — and currency
+ * conversions (e.g. "10€ in $ =" or "10€=$"). No general expression
+ * evaluation, no function calls, no variables.
+ *
+ * User-friendly symbols are normalized before parsing:
+ *   ÷ → /,  × → *,  x → *,  ² → ^2,  ³ → ^3
+ *
+ * Exchange rates are supplied by the caller via [rateProvider] (symbol → rate
+ * vs. EUR). The evaluator itself never fetches anything and never touches the
+ * network.
  *
  * Pure Kotlin with no Android dependencies so it is unit-testable on the JVM.
  */
 object MathExpressionEvaluator {
 
-    /** Allowed characters: digits, decimal point, + - * /, parens, whitespace. */
-    private val allowedChars = Regex("^[\\d+\\-*/().\\s]+$")
-    private val hasDigit = Regex("\\d")
-    private val hasOperator = Regex("[+\\-*/]")
+    /**
+     * The outcome of evaluating a recognized expression.
+     *
+     * [expression] is the CLEANED expression text (no trailing '=') exactly as
+     * the user typed it — this is what gets auto-inserted, so an already-
+     * inserted "2+2 = 4" can never produce a malformed "2+2 = = 4" re-insert.
+     */
+    data class MathResult(
+        val expression: String,
+        val value: Double,
+        val formatted: String,
+        val isConversion: Boolean = false,
+        val fromSymbol: String? = null,
+        val toSymbol: String? = null,
+        val amount: Double = 0.0,
+        /** Set when the expression was recognized but can't be completed yet
+         *  (e.g. exchange rates not available). */
+        val unavailableReason: String? = null,
+    )
+
     private val trailingEquals = Regex("=\\s*$")
+    private val hasDigit = Regex("\\d")
+    private val hasOperator = Regex("[+\\-*/^%]")
+    private val trailingOperator = "+-*/^"
+
+    /** Characters allowed in an arithmetic expression after normalization. */
+    private val allowedChars = Regex("^[\\d+\\-*/().\\s^%]+$")
+
+    private val currencySymbols = "€$£¥"
+    private val conversionPattern =
+        Regex("^(\\d+(?:\\.\\d+)?)\\s*([€$£¥])\\s*(?:in|=)\\s*([€$£¥])\\s*=?\\s*$")
 
     /**
-     * Evaluates [text] if it is a strict arithmetic expression ending with '='.
-     * Returns the formatted result string, or null if not a valid expression.
+     * Evaluates [text]. Returns a [MathResult] if it matches the narrow
+     * grammar, or null if it doesn't (the text is then discarded — no parsing
+     * of arbitrary content happens).
      *
-     * Validation mirrors the Dart MathTriggerDetector: character allowlist,
-     * must contain a digit and an operator, must not end with an operator,
-     * and parentheses must be balanced. Anything else is discarded immediately.
+     * Currency conversions are recognized when the text contains a currency
+     * symbol; they may end in '=' or in the target symbol ("10€ in $ =" and
+     * "10€=$" both work). Plain arithmetic must end with '='.
      */
-    fun evaluate(text: String): String? {
+    fun evaluate(
+        text: String,
+        rateProvider: (String) -> Double? = { null },
+    ): MathResult? {
         if (text.isEmpty()) return null
+
+        if (text.any { it in currencySymbols }) {
+            return evaluateConversion(text, rateProvider)
+        }
         if (!trailingEquals.containsMatchIn(text)) return null
 
         val expr = text.replace(trailingEquals, "").trim()
         if (expr.isEmpty()) return null
+        return evaluateArithmetic(expr)
+    }
 
-        if (!allowedChars.containsMatchIn(expr)) return null
-        if (!hasDigit.containsMatchIn(expr) || !hasOperator.containsMatchIn(expr)) return null
+    // -----------------------------------------------------------------------
+    // Arithmetic
+    // -----------------------------------------------------------------------
 
-        val lastChar = expr.trimEnd().last()
-        if ("+-*/".contains(lastChar)) return null
+    private fun evaluateArithmetic(expr: String): MathResult? {
+        val normalized = normalize(expr)
+
+        if (!allowedChars.containsMatchIn(normalized)) return null
+        if (!hasDigit.containsMatchIn(normalized) || !hasOperator.containsMatchIn(normalized)) return null
+
+        val trimmed = normalized.trimEnd()
+        if (trimmed.isEmpty()) return null
+        if (trailingOperator.contains(trimmed.last())) return null
 
         // Parentheses must be balanced.
         var depth = 0
-        for (c in expr) {
+        for (c in normalized) {
             if (c == '(') depth++
             if (c == ')') depth--
             if (depth < 0) return null
@@ -47,17 +98,32 @@ object MathExpressionEvaluator {
         if (depth != 0) return null
 
         return try {
-            val result = evalArithmetic(expr)
+            val result = evalArithmetic(normalized)
             if (result.isNaN() || result.isInfinite()) null
-            else if (result == result.toLong().toDouble()) result.toLong().toString()
-            else String.format(
-                "%.${minOf(result.toString().split(".").getOrElse(1) { "" }.length.coerceIn(1, 6))}f",
-                result
+            else MathResult(
+                expression = expr.trimEnd(),
+                value = result,
+                formatted = formatNumber(result),
             )
         } catch (_: Exception) {
             null
         }
     }
+
+    /** Normalizes user-friendly symbols to canonical math syntax. */
+    private fun normalize(expr: String): String = expr
+        .replace("÷", "/")
+        .replace("×", "*")
+        .replace('x', '*')
+        .replace("²", "^2")
+        .replace("³", "^3")
+
+    private fun formatNumber(result: Double): String =
+        if (result == result.toLong().toDouble()) result.toLong().toString()
+        else String.format(
+            "%.${minOf(result.toString().split(".").getOrElse(1) { "" }.length.coerceIn(1, 6))}f",
+            result
+        )
 
     // Parser state shared across recursive-descent methods
     private var tokens = listOf<String>()
@@ -95,9 +161,34 @@ object MathExpressionEvaluator {
     private fun parseUnary(): Double {
         if (pos < tokens.size && tokens[pos] == "-") {
             pos++
-            return -parseAtom()
+            return -parseUnary()
         }
-        return parseAtom()
+        return parsePower()
+    }
+
+    /**
+     * Exponent. A unary minus is folded into the base by the tokenizer, so
+     * -2^2 = (-2)^2 = 4 (like a phone calculator); a binary minus applies
+     * after the exponent: 0-2^2 = -4.
+     */
+    private fun parsePower(): Double {
+        val left = parsePostfix()
+        if (pos < tokens.size && tokens[pos] == "^") {
+            pos++
+            val right = parseUnary() // right-associative; allows 2^-1
+            return Math.pow(left, right)
+        }
+        return left
+    }
+
+    /** Percent is postfix: 50% → 0.5. */
+    private fun parsePostfix(): Double {
+        var v = parseAtom()
+        while (pos < tokens.size && tokens[pos] == "%") {
+            pos++
+            v /= 100.0
+        }
+        return v
     }
 
     private fun parseAtom(): Double {
@@ -116,15 +207,15 @@ object MathExpressionEvaluator {
         val buf = StringBuilder()
         for (c in expr) {
             if (c == ' ') continue
-            if (c == '+' || c == '-' || c == '*' || c == '/') {
+            if (c == '+' || c == '-' || c == '*' || c == '/' || c == '^') {
                 // A '-' is a unary minus only when no number is being built
-                // AND the previous token is an operator/start. Otherwise it is
-                // a binary operator. (Checking buf.isEmpty() is essential:
-                // for "9-4", the "9" is still in buf when '-' arrives, so it
-                // must be binary — treating it as unary would produce "9-4"
-                // as one token and crash the parse.)
+                // AND the previous token is an operator/paren/start. Otherwise
+                // it is a binary operator. (Checking buf.isEmpty() is
+                // essential: for "9-4", the "9" is still in buf when '-'
+                // arrives, so it must be binary — treating it as unary would
+                // produce "9-4" as one token and crash the parse.)
                 if (c == '-' && buf.isEmpty() &&
-                    (out.isEmpty() || out.last().let { it == "+" || it == "-" || it == "*" || it == "/" })
+                    (out.isEmpty() || out.last().let { it == "+" || it == "-" || it == "*" || it == "/" || it == "^" || it == "(" })
                 ) {
                     buf.append(c)
                 } else {
@@ -140,6 +231,12 @@ object MathExpressionEvaluator {
                     buf.clear()
                 }
                 out.add(c.toString())
+            } else if (c == '%') {
+                if (buf.isNotEmpty()) {
+                    out.add(buf.toString())
+                    buf.clear()
+                }
+                out.add("%")
             } else {
                 buf.append(c)
             }
@@ -147,4 +244,46 @@ object MathExpressionEvaluator {
         if (buf.isNotEmpty()) out.add(buf.toString())
         return out
     }
+
+    // -----------------------------------------------------------------------
+    // Currency conversion
+    // -----------------------------------------------------------------------
+
+    private fun evaluateConversion(
+        text: String,
+        rateProvider: (String) -> Double?,
+    ): MathResult? {
+        val match = conversionPattern.find(text.trim()) ?: return null
+        val amount = match.groupValues[1].toDoubleOrNull() ?: return null
+        val from = match.groupValues[2]
+        val to = match.groupValues[3]
+        val fromRate = rateProvider(from)
+        val toRate = rateProvider(to)
+        if (fromRate == null || toRate == null || fromRate <= 0.0 || toRate <= 0.0) {
+            return MathResult(
+                expression = formatAmount(amount) + " " + from,
+                value = Double.NaN,
+                formatted = "",
+                isConversion = true,
+                fromSymbol = from,
+                toSymbol = to,
+                amount = amount,
+                unavailableReason = "Exchange rates not available yet — Nexus needs internet once to fetch them.",
+            )
+        }
+        val result = amount * toRate / fromRate
+        return MathResult(
+            expression = formatAmount(amount) + " " + from,
+            value = result,
+            formatted = String.format("%.2f %s", result, to),
+            isConversion = true,
+            fromSymbol = from,
+            toSymbol = to,
+            amount = amount,
+        )
+    }
+
+    private fun formatAmount(amount: Double): String =
+        if (amount == amount.toLong().toDouble()) amount.toLong().toString()
+        else amount.toString().trimEnd('0').trimEnd('.')
 }

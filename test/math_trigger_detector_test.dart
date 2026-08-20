@@ -82,8 +82,37 @@ void main() {
       expect(MathTriggerDetector.detect('12++8='), isNull);
     });
 
-    test('returns null for expressions with exponentiation', () {
-      expect(MathTriggerDetector.detect('2^3='), isNull);
+    test('matches division sign ÷', () {
+      final r = MathTriggerDetector.detect('10÷2=');
+      expect(r, isNotNull);
+      expect(r!.formatted, '5');
+    });
+
+    test('matches multiplication sign × and x', () {
+      final r1 = MathTriggerDetector.detect('6×7=');
+      expect(r1, isNotNull);
+      expect(r1!.formatted, '42');
+      final r2 = MathTriggerDetector.detect('2x3=');
+      expect(r2, isNotNull);
+      expect(r2!.formatted, '6');
+    });
+
+    test('matches exponentiation ^, ², ³', () {
+      final r1 = MathTriggerDetector.detect('2^3=');
+      expect(r1, isNotNull);
+      expect(r1!.formatted, '8');
+      final r2 = MathTriggerDetector.detect('3²=');
+      expect(r2, isNotNull);
+      expect(r2!.formatted, '9');
+      final r3 = MathTriggerDetector.detect('2³=');
+      expect(r3, isNotNull);
+      expect(r3!.formatted, '8');
+    });
+
+    test('matches percent as postfix', () {
+      final r = MathTriggerDetector.detect('50%=');
+      expect(r, isNotNull);
+      expect(r!.formatted, '0.5');
     });
 
     test('returns null for expressions with parentheses but missing close', () {

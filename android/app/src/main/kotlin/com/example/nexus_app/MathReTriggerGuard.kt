@@ -47,6 +47,21 @@ class MathReTriggerGuard(
     }
 
     /**
+     * Records that Nexus just detected [expressionText] and is showing its
+     * result popup while waiting (the short delay) before auto-inserting.
+     *
+     * While an expression is pending, apps re-render the field and re-fire the
+     * same text — that is NOT user input, so it must neither re-trigger nor
+     * cancel the pending insert. Does NOT start the suppression window: the
+     * detecting event itself has already been processed.
+     */
+    fun notePending(expressionText: String) {
+        lastActedExpression = normalize(expressionText)
+        lastInsertedText = null
+        lastActedAtMs = now()
+    }
+
+    /**
      * True while inside the suppression window (immediate events fired by the
      * insert itself). Checked in onAccessibilityEvent BEFORE any field text is
      * read, so the password/financial safeguards keep their ordering.

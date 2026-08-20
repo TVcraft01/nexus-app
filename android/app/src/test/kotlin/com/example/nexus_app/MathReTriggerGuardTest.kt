@@ -145,4 +145,51 @@ class MathReTriggerGuardTest {
         clock.advance(MathReTriggerGuard.SUPPRESS_WINDOW_MS + 1000)
         assertTrue(guard.isDuplicateOfRecentAction("12+8="))
     }
+
+    // ---- Pending window (delay before auto-insert) -----------------------
+
+    @Test
+    fun pendingExpressionReDeliveryIsDuplicate() {
+        val clock = FakeClock()
+        val guard = MathReTriggerGuard(now = clock::time)
+        // The 2s grace delay: while a result is pending, apps re-render the
+        // field and re-fire the same text — that must not cancel the insert.
+        guard.notePending("12+8=")
+        assertTrue(guard.isDuplicateOfRecentAction("12+8="))
+        assertTrue(guard.isDuplicateOfRecentAction("12 + 8 ="))
+    }
+
+    @Test
+    fun pendingDoesNotStartTheSuppressionWindow() {
+        val clock = FakeClock()
+        val guard = MathReTriggerGuard(now = clock::time)
+        guard.notePending("12+8=")
+        // The detecting event has already been processed; real user input
+        // right after must still be seen (to cancel the pending insert).
+        assertFalse(guard.isWithinSuppressionWindow())
+    }
+
+    @Test
+    fun differentTextDuringPendingIsNotDuplicate() {
+        val clock = FakeClock()
+        val guard = MathReTriggerGuard(now = clock::time)
+        guard.notePending("12+8=")
+        // Genuine new input during the delay cancels the pending insert.
+        assertFalse(guard.isDuplicateOfRecentAction("5+5=" ))
+        assertFalse(guard.isDuplicateOfRecentAction("12+8+3=" ))
+    }
+
+    @Test
+    fun pendingThenInsertSuppressesItsOwnEvents() {
+        val clock = FakeClock()
+        val guard = MathReTriggerGuard(now = clock::time)
+        guard.notePending("12+8=")
+        // The delay elapses; the insert happens and is recorded.
+        guard.noteInsert("12+8=", "12+8 = 20")
+        assertTrue(guard.isWithinSuppressionWindow())
+        clock.advance(MathReTriggerGuard.SUPPRESS_WINDOW_MS + 1000)
+        // Post-insert fragments of the inserted text are still deduped.
+        assertTrue(guard.isDuplicateOfRecentAction("12+8 = 2"))
+        assertTrue(guard.isDuplicateOfRecentAction("12+8 ="))
+    }
 }
