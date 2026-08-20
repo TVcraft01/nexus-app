@@ -8,6 +8,7 @@ import '../ai/action_registry.dart';
 import '../ai/nexus_brain.dart';
 import '../math_notes/math_notes_service.dart';
 import 'app_list_screen.dart';
+import 'battery_optimization_service.dart';
 import 'settings_service.dart';
 
 /// This app's applicationId (see android/app/build.gradle.kts). Used to deep
@@ -158,6 +159,11 @@ class ActionPermissionsScreen extends StatelessWidget {
               const Divider(),
               _sectionHeader(context, 'Math notes'),
               _buildMathNotesSection(context),
+              if (Platform.isAndroid) ...[
+                const Divider(),
+                _sectionHeader(context, 'Background reliability'),
+                const _BatteryOptimizationSection(),
+              ],
               const Divider(),
               _sectionHeader(context, 'System permissions'),
               Padding(
@@ -197,6 +203,103 @@ class ActionPermissionsScreen extends StatelessWidget {
   Widget _buildMathNotesSection(BuildContext context) {
     final settings = SettingsService();
     return _MathNotesToggle(settings: settings);
+  }
+}
+
+/// Explains and requests the standard Android battery-optimization exemption.
+/// Samsung may still require the user to remove Nexus from Sleeping apps / add
+/// it to Never sleeping apps separately; Android cannot change that OEM policy.
+class _BatteryOptimizationSection extends StatefulWidget {
+  const _BatteryOptimizationSection();
+
+  @override
+  State<_BatteryOptimizationSection> createState() =>
+      _BatteryOptimizationSectionState();
+}
+
+class _BatteryOptimizationSectionState
+    extends State<_BatteryOptimizationSection> {
+  final _battery = BatteryOptimizationService.instance;
+
+  @override
+  void initState() {
+    super.initState();
+    _battery.refresh();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<bool>(
+      valueListenable: _battery.ignoringBatteryOptimizations,
+      builder: (context, exempt, _) {
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Math notes and other accessibility features need Nexus to '
+                'remain available while the app is in the background. Android '
+                'battery optimization and Samsung\'s own Freecess/sleeping-app '
+                'policy can freeze them after a while.',
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Icon(
+                    exempt ? Icons.check_circle : Icons.warning_amber,
+                    size: 18,
+                    color: exempt ? Colors.green : Colors.orange,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      exempt
+                          ? 'Android battery optimization: exempt'
+                          : 'Android battery optimization: not exempt',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                            color: exempt ? Colors.green : Colors.orange,
+                          ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 4,
+                children: [
+                  FilledButton.tonal(
+                    onPressed: exempt
+                        ? null
+                        : () async {
+                            await _battery.requestExemption();
+                          },
+                    child: Text(exempt
+                        ? 'Android exemption granted'
+                        : 'Allow background operation'),
+                  ),
+                  OutlinedButton(
+                    onPressed: () => _battery.openBatterySettings(),
+                    child: const Text('Open battery settings'),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'This opens Android\'s consent screen; Nexus cannot grant it '
+                'silently. On Samsung, also check Settings > Battery > '
+                'Background usage limits and add Nexus to Never sleeping apps '
+                'if it still stops working. This is separate from the '
+                'accessibility toggle.',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
+          ),
+        );
+      },
+    );
   }
 }
 

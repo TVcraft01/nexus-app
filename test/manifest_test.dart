@@ -28,6 +28,16 @@ void main() {
     expect(manifest, contains('<package android:name="deezer.android.app"/>'));
   });
 
+  test('declares the user-consent battery optimization permission', () {
+    expect(
+      manifest,
+      contains(
+        '<uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>',
+      ),
+      reason: 'Nexus must declare this before opening the OS consent dialog',
+    );
+  });
+
   test('declares maps visibility for navigation intents', () {
     expect(
       manifest,

@@ -15,6 +15,7 @@ class MainActivity : FlutterActivity() {
         private const val MATH_NOTES_CHANNEL = "com.example.nexus_app/math_notes"
         private const val READ_ALOUD_CHANNEL = "com.example.nexus_app/read_aloud"
         private const val INSTALLED_APPS_CHANNEL = "com.example.nexus_app/installed_apps"
+        private const val BATTERY_CHANNEL = "com.example.nexus_app/battery_optimization"
         var channel: MethodChannel? = null
         var mathNotesChannel: MethodChannel? = null
         var readAloudSink: EventChannel.EventSink? = null
@@ -206,6 +207,46 @@ class MainActivity : FlutterActivity() {
             }
         }
 
+        // Battery optimization: this is an explicit user-consent path. It does
+        // not attempt to change Samsung's separate sleeping-app policy silently.
+        val batteryChannel = MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            BATTERY_CHANNEL
+        )
+        batteryChannel.setMethodCallHandler { call, result ->
+            when (call.method) {
+                "isIgnoringBatteryOptimizations" -> {
+                    result.success(isIgnoringBatteryOptimizations())
+                }
+                "requestIgnoreBatteryOptimizations" -> {
+                    try {
+                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M &&
+                            !isIgnoringBatteryOptimizations()
+                        ) {
+                            startActivity(
+                                Intent(
+                                    Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                                    android.net.Uri.parse("package:$packageName")
+                                )
+                            )
+                        }
+                        result.success(true)
+                    } catch (e: Exception) {
+                        result.error("FAILED", e.message, null)
+                    }
+                }
+                "openBatterySettings" -> {
+                    try {
+                        startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                        result.success(true)
+                    } catch (e: Exception) {
+                        result.error("FAILED", e.message, null)
+                    }
+                }
+                else -> result.notImplemented()
+            }
+        }
+
         // Installed-apps channel: lists launcher apps for the per-app allowlist.
         // Dart calls getInstalledApps here (see AppListScreen).
         val installedAppsChannel = MethodChannel(
@@ -293,5 +334,13 @@ class MainActivity : FlutterActivity() {
 
     private fun isAccessibilityServiceEnabled(): Boolean {
         return NexusAccessibilityService.isRunning()
+    }
+
+    private fun isIgnoringBatteryOptimizations(): Boolean {
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.M) {
+            return true
+        }
+        val powerManager = getSystemService(POWER_SERVICE) as android.os.PowerManager
+        return powerManager.isIgnoringBatteryOptimizations(packageName)
     }
 }

@@ -19,6 +19,9 @@
     <uses-permission android:name="com.android.alarm.permission.SET_ALARM"/>
     <!-- System overlay for the math-notes floating result display. -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
+    <!-- Lets Nexus request (never silently grant) the standard Android battery
+         optimization exemption needed for long-lived accessibility features. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
 
     <application
         android:label="Nexus"
