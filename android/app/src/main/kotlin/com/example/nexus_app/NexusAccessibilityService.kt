@@ -313,6 +313,16 @@ class NexusAccessibilityService : AccessibilityService() {
                 try { wm.removeView(tv) } catch (_: Exception) {}
             }, 4000)
         } catch (e: Exception) {
+            // "Display over other apps" not granted: fall back to a Toast so the
+            // result is never silently dropped. The Settings screen guides the
+            // user to grant overlay permission.
+            try {
+                android.widget.Toast.makeText(
+                    this,
+                    "= $result — enable \"Display over other apps\" in Nexus Settings to see results inline",
+                    android.widget.Toast.LENGTH_LONG
+                ).show()
+            } catch (_: Exception) {}
             Log.e(TAG, "Failed to show math overlay", e)
         }
     }

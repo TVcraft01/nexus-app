@@ -382,25 +382,86 @@ class _MathNotesToggleState extends State<_MathNotesToggle> {
 
   Future<void> _load() async {
     final enabled = await widget.settings.getMathNotes();
+    // Refresh the overlay-permission state (e.g. after the user returns from
+    // the OS "Display over other apps" screen).
+    await MathNotesService.instance.refreshOverlayPermission();
     if (mounted) setState(() => _enabled = enabled);
+  }
+
+  Future<void> _onToggle(bool v) async {
+    await widget.settings.setMathNotes(v);
+    await MathNotesService.instance.setEnabled(v);
+    await MathNotesService.instance.refreshOverlayPermission();
+    if (mounted) setState(() => _enabled = v);
   }
 
   @override
   Widget build(BuildContext context) {
     if (_enabled == null) return const SizedBox.shrink();
-    return SwitchListTile(
-      secondary: const Icon(Icons.calculate_outlined),
-      title: const Text('Math notes'),
-      subtitle: const Text(
-          'When you type a simple arithmetic expression ending with = '
-          '(like 12+8=), Nexus shows the result inline. Password fields '
-          'and financial apps are always skipped. Off by default.'),
-      value: _enabled!,
-      onChanged: (v) async {
-        await widget.settings.setMathNotes(v);
-        await MathNotesService.instance.setEnabled(v);
-        if (mounted) setState(() => _enabled = v);
-      },
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SwitchListTile(
+          secondary: const Icon(Icons.calculate_outlined),
+          title: const Text('Math notes'),
+          subtitle: const Text(
+              'When you type a simple arithmetic expression ending with = '
+              '(like 12+8=), Nexus shows the result inline. Password fields '
+              'and financial apps are always skipped. Off by default.'),
+          value: _enabled!,
+          onChanged: _onToggle,
+        ),
+        if (_enabled == true)
+          ValueListenableBuilder<bool>(
+            valueListenable: MathNotesService.instance.canDrawOverlays,
+            builder: (context, canOverlay, _) {
+              if (canOverlay) {
+                return const Padding(
+                  padding: EdgeInsets.fromLTRB(56, 0, 16, 12),
+                  child: Row(
+                    children: [
+                      Icon(Icons.check_circle_outline,
+                          size: 16, color: Colors.green),
+                      SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Results will appear as a floating overlay on top '
+                          'of other apps.',
+                          style: TextStyle(fontSize: 12),
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              }
+              return Padding(
+                padding: const EdgeInsets.fromLTRB(56, 0, 16, 12),
+                child: Row(
+                  children: [
+                    const Icon(Icons.warning_amber_outlined,
+                        size: 16, color: Colors.orange),
+                    const SizedBox(width: 8),
+                    const Expanded(
+                      child: Text(
+                        'To show results over other apps, Android needs you '
+                        'to allow Nexus to display over other apps. Until '
+                        'then, results appear as a notification-style toast '
+                        'instead of an overlay.',
+                        style: TextStyle(fontSize: 12),
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: () async {
+                        await MathNotesService.instance.openOverlaySettings();
+                      },
+                      child: const Text('Allow overlay'),
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
+      ],
     );
   }
 }

@@ -28,6 +28,10 @@ class MathNotesService {
   static const _channel = MethodChannel('com.example.nexus_app/math_notes');
   static const _prefsKey = 'nexus_math_notes_enabled';
 
+  /// Overridden by tests to exercise the Android channel path on any host.
+  @visibleForTesting
+  static bool debugIsAndroid = Platform.isAndroid;
+
   final ValueNotifier<bool> _enabled = ValueNotifier(false);
   final ValueNotifier<MathOverlay?> _overlay = ValueNotifier(null);
 
@@ -35,6 +39,11 @@ class MathNotesService {
 
   /// Whether the math notes feature is enabled by the user.
   ValueNotifier<bool> get enabled => _enabled;
+
+  /// Whether the app may draw the result overlay over other apps. Android
+  /// requires the user to grant "Display over other apps" at runtime — the
+  /// manifest permission alone is not enough.
+  ValueNotifier<bool> canDrawOverlays = ValueNotifier(false);
 
   /// The current overlay to display (null when no result is showing).
   ValueNotifier<MathOverlay?> get overlay => _overlay;
@@ -44,7 +53,7 @@ class MathNotesService {
     if (_initialized) return;
     _initialized = true;
 
-    if (!Platform.isAndroid) return;
+    if (!debugIsAndroid) return;
 
     _channel.setMethodCallHandler((call) async {
       if (call.method == 'onTextChanged') {
@@ -62,6 +71,7 @@ class MathNotesService {
     final prefs = await SharedPreferences.getInstance();
     _enabled.value = prefs.getBool(_prefsKey) ?? false;
     _syncToNative();
+    await refreshOverlayPermission();
   }
 
   /// Toggle the math notes feature on/off.
@@ -74,8 +84,38 @@ class MathNotesService {
   }
 
   void _syncToNative() {
-    if (!Platform.isAndroid) return;
-    _channel.invokeMethod('setMathNotesEnabled', {'enabled': _enabled.value});
+    if (!debugIsAndroid) return;
+    // Best-effort: never let a platform-channel error (e.g. a missing native
+    // handler) surface as an unhandled async exception during startup.
+    unawaited(
+      _channel
+          .invokeMethod<void>(
+              'setMathNotesEnabled', {'enabled': _enabled.value})
+          .catchError((_) {}),
+    );
+  }
+
+  /// Refreshes whether the app may draw overlays over other apps. Call after
+  /// the user returns from the overlay-permission settings screen.
+  Future<void> refreshOverlayPermission() async {
+    if (!debugIsAndroid) return;
+    try {
+      final ok = await _channel.invokeMethod<bool>('canDrawOverlays');
+      canDrawOverlays.value = ok ?? false;
+    } catch (_) {
+      canDrawOverlays.value = false;
+    }
+  }
+
+  /// Deep-links to the OS screen where the user grants "Display over other
+  /// apps". Nexus cannot grant this itself — the user must approve it.
+  Future<void> openOverlaySettings() async {
+    if (!debugIsAndroid) return;
+    try {
+      await _channel.invokeMethod('openOverlaySettings');
+    } catch (_) {
+      // Best-effort: the permission screen is a convenience, not critical.
+    }
   }
 
   /// Called when the accessibility service reports a text change.
