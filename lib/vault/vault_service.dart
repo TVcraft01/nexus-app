@@ -16,7 +16,11 @@ import 'vault_entry.dart';
 /// - The vault requires authentication before ANY access (enforced by AuthGate,
 ///   not here — this service trusts its callers to have verified auth).
 class VaultService {
-  static const _storage = FlutterSecureStorage();
+  // Use a dedicated namespace so flutter_secure_storage's metadata doesn't
+  // corrupt FlutterSharedPreferences.xml (which shared_preferences uses).
+  static const _storage = FlutterSecureStorage(
+    aOptions: AndroidOptions(storageNamespace: 'vault'),
+  );
   static const _vaultKey = 'nexus_vault_entries';
 
   static final VaultService instance = VaultService._();
