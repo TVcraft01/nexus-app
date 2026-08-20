@@ -8,6 +8,7 @@ class SettingsService {
   static const _allowDevTasksKey = 'nexus_allow_dev_tasks';
   static const _devTaskCommandKey = 'nexus_dev_task_command';
   static const _devTaskCwdKey = 'nexus_dev_task_cwd';
+  static const _assistAppKey = 'nexus_assist_app';
 
   /// Default command shown on a device that enables "Allow remote dev tasks"
   /// before configuring anything. It exists so a request never runs against
@@ -80,5 +81,21 @@ class SettingsService {
   Future<void> setDevTaskCwd(String value) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_devTaskCwdKey, value);
+  }
+
+  // ---- Assist with other apps (accessibility) ---------------------------
+
+  /// Whether Nexus may use the Accessibility service to read the screen and
+  /// perform a single user-requested action in another app. Default OFF.
+  /// Requires both this toggle AND the OS-level accessibility service to be
+  /// enabled.
+  Future<bool> getAssistApp() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_assistAppKey) ?? false;
+  }
+
+  Future<void> setAssistApp(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_assistAppKey, value);
   }
 }

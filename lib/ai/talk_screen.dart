@@ -46,7 +46,49 @@ class _TalkScreenState extends State<TalkScreen> {
   @override
   void initState() {
     super.initState();
-    _runner = NexusActionRunner(devicesProvider: widget.devicesProvider);
+    _runner = NexusActionRunner(
+      devicesProvider: widget.devicesProvider,
+      confirmAction: _confirmAssistAction,
+    );
+  }
+
+  /// Shows a confirmation dialog for assistApp actions. Returns true if the
+  /// user approved, false if cancelled. This is the ONLY way to execute an
+  /// assistApp action — it cannot be bypassed.
+  Future<bool> _confirmAssistAction(AssistAppPlan plan) async {
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        icon: const Icon(Icons.touch_app, size: 32),
+        title: const Text('Confirm action'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(plan.description, style: Theme.of(context).textTheme.bodyLarge),
+            const SizedBox(height: 12),
+            Text(
+              'This will interact with another app on your device. '
+              'Only approve if you trust this action.',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Do it'),
+          ),
+        ],
+      ),
+    );
+    return result == true;
   }
 
   NexusBrain get _brain {

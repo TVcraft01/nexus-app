@@ -51,6 +51,21 @@
             android:name="flutterEmbedding"
             android:value="2" />
 
+        <!-- Accessibility service: screen-reading and single-action app assistance.
+             Only active when the user enables both this service in Android Settings
+             AND the Nexus-side toggle in Actions & permissions. -->
+        <service
+            android:name=".NexusAccessibilityService"
+            android:exported="false"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
+
         <!-- flutter_local_notifications receivers for scheduled reminders. -->
         <receiver
             android:exported="false"

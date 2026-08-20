@@ -173,6 +173,20 @@ const List<NexusActionDefinition> nexusActions = [
       'notifications only on my laptop',
     ],
   ),
+  NexusActionDefinition(
+    command: NexusCommand.assistApp,
+    schemaName: 'assistApp',
+    title: 'Assist with other apps',
+    icon: Icons.touch_app,
+    description: 'Let Nexus see and interact with other apps\' screens, '
+        'one action at a time, to help with things it can\'t do through '
+        'built-in commands. Requires a local model (LLM). Off by default.',
+    examples: [
+      'tap Send in WhatsApp',
+      'type my name in this field',
+      'tap the settings button',
+    ],
+  ),
 ];
 
 /// Looks up the catalogue entry for [command], or null when there isn't one

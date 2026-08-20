@@ -3,7 +3,10 @@ import 'dart:io';
 import 'package:android_intent_plus/android_intent.dart';
 import 'package:flutter/material.dart';
 
+import '../accessibility/accessibility_service.dart';
 import '../ai/action_registry.dart';
+import '../ai/nexus_brain.dart';
+import 'settings_service.dart';
 
 /// This app's applicationId (see android/app/build.gradle.kts). Used to deep
 /// link to the app's page in the system settings, where permissions are
@@ -139,13 +142,17 @@ class ActionPermissionsScreen extends StatelessWidget {
                 ),
               ),
               for (final def in nexusActions)
-                SwitchListTile(
-                  secondary: Icon(def.icon),
-                  title: Text(def.title),
-                  subtitle: Text(def.description),
-                  value: registry.isEnabled(def.command),
-                  onChanged: (v) => _onToggle(context, def, v),
-                ),
+                if (def.command != NexusCommand.assistApp)
+                  SwitchListTile(
+                    secondary: Icon(def.icon),
+                    title: Text(def.title),
+                    subtitle: Text(def.description),
+                    value: registry.isEnabled(def.command),
+                    onChanged: (v) => _onToggle(context, def, v),
+                  ),
+              const Divider(),
+              _sectionHeader(context, 'Assist with other apps'),
+              _buildAssistAppSection(context),
               const Divider(),
               _sectionHeader(context, 'System permissions'),
               Padding(
@@ -175,5 +182,152 @@ class ActionPermissionsScreen extends StatelessWidget {
         },
       ),
     );
+  }
+
+  Widget _buildAssistAppSection(BuildContext context) {
+    final settings = SettingsService();
+    return _AssistAppToggle(settings: settings);
+  }
+}
+
+/// Stateful widget for the "Assist with other apps" toggle that shows
+/// both the Nexus-side toggle AND the OS-level accessibility service status.
+class _AssistAppToggle extends StatefulWidget {
+  final SettingsService settings;
+
+  const _AssistAppToggle({required this.settings});
+
+  @override
+  State<_AssistAppToggle> createState() => _AssistAppToggleState();
+}
+
+class _AssistAppToggleState extends State<_AssistAppToggle> {
+  bool? _nexusEnabled;
+  bool _osEnabled = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+    AccessibilityService.instance.init();
+    AccessibilityService.instance.serviceRunning.addListener(_onServiceChanged);
+  }
+
+  @override
+  void dispose() {
+    AccessibilityService.instance.serviceRunning.removeListener(_onServiceChanged);
+    super.dispose();
+  }
+
+  void _onServiceChanged() {
+    if (mounted) {
+      setState(() {
+        _osEnabled = AccessibilityService.instance.serviceRunning.value;
+      });
+    }
+  }
+
+  Future<void> _load() async {
+    final enabled = await widget.settings.getAssistApp();
+    final osEnabled = AccessibilityService.instance.serviceRunning.value;
+    if (mounted) {
+      setState(() {
+        _nexusEnabled = enabled;
+        _osEnabled = osEnabled;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_nexusEnabled == null) {
+      return const SizedBox.shrink();
+    }
+
+    return Column(
+      children: [
+        SwitchListTile(
+          secondary: const Icon(Icons.touch_app),
+          title: const Text('Assist with other apps'),
+          subtitle: const Text(
+              'Let Nexus see and interact with other apps\' screens, '
+              'one action at a time, to help with things it can\'t do through '
+              'built-in commands. Requires a local model (LLM). Off by default.'),
+          value: _nexusEnabled!,
+          onChanged: (v) async {
+            await widget.settings.setAssistApp(v);
+            await ActionRegistry.instance.setEnabled(
+              NexusCommand.assistApp,
+              v,
+            );
+            if (mounted) setState(() => _nexusEnabled = v);
+          },
+        ),
+        if (_nexusEnabled!)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(72, 0, 16, 8),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(
+                      _osEnabled ? Icons.check_circle : Icons.error_outline,
+                      size: 16,
+                      color: _osEnabled ? Colors.green : Colors.orange,
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        _osEnabled
+                            ? 'System accessibility: enabled'
+                            : 'System accessibility: NOT enabled',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                              color: _osEnabled ? Colors.green : Colors.orange,
+                            ),
+                      ),
+                    ),
+                  ],
+                ),
+                if (!_osEnabled) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    'Nexus can\'t read screens until you also enable the '
+                    'accessibility service in Android Settings. Nexus can\'t '
+                    'do this for you — Android requires you to flip the '
+                    'toggle yourself.',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                  const SizedBox(height: 8),
+                  FilledButton.tonal(
+                    onPressed: () => _openAccessibilitySettings(context),
+                    child: const Text('Open accessibility settings'),
+                  ),
+                ],
+                const SizedBox(height: 4),
+                Text(
+                  'Screen content is processed entirely by the on-device '
+                  'model and never leaves this device. Only one action is '
+                  'performed per request, with your explicit confirmation '
+                  'before every tap or type.',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                ),
+              ],
+            ),
+          ),
+      ],
+    );
+  }
+
+  Future<void> _openAccessibilitySettings(BuildContext context) async {
+    await AccessibilityService.instance.openAccessibilitySettings();
+    await AccessibilityService.instance.refreshStatus();
+    if (mounted) {
+      setState(() {
+        _osEnabled = AccessibilityService.instance.serviceRunning.value;
+      });
+    }
   }
 }

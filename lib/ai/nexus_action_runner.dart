@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:android_intent_plus/android_intent.dart';
@@ -8,11 +9,37 @@ import 'package:flutter_tts/flutter_tts.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
+import '../accessibility/accessibility_service.dart';
 import '../models/paired_device.dart';
 import '../sync/knowledge_store.dart';
 import 'action_registry.dart';
 import 'nexus_brain.dart';
 import 'reminder_service.dart';
+
+/// The result of an assistApp request: the action description for confirmation
+/// plus the screen tree and element index needed to execute it.
+class AssistAppPlan {
+  final String description; // e.g. "Nexus wants to tap 'Send' in WhatsApp"
+  final String screenTree;
+  final int elementId;
+  final String actionType; // 'tap' or 'type'
+  final String? textToType;
+  final String packageName;
+
+  const AssistAppPlan({
+    required this.description,
+    required this.screenTree,
+    required this.elementId,
+    required this.actionType,
+    this.textToType,
+    required this.packageName,
+  });
+}
+
+/// A callback that shows a confirmation dialog and returns true if the user
+/// approved. Injected via the constructor so the runner stays testable without
+/// a real Flutter context.
+typedef ConfirmAction = Future<bool> Function(AssistAppPlan plan);
 
 /// Turns an exception from an external intent launch into a short,
 /// user-facing reason. Exposed as a function (rather than inlined) so the
@@ -38,6 +65,7 @@ class NexusActionRunner {
   final ReminderService _reminders;
   final KnowledgeStore _store;
   final Future<List<PairedDevice>> Function() _devicesProvider;
+  final ConfirmAction? _confirmAction;
   final FlutterTts _tts = FlutterTts();
   bool _ttsReady = false;
 
@@ -52,9 +80,11 @@ class NexusActionRunner {
     ReminderService? reminders,
     KnowledgeStore? store,
     Future<List<PairedDevice>> Function()? devicesProvider,
+    ConfirmAction? confirmAction,
   })  : _reminders = reminders ?? ReminderService(),
         _store = store ?? KnowledgeStore.instance,
-        _devicesProvider = devicesProvider ?? (() async => const []);
+        _devicesProvider = devicesProvider ?? (() async => const []),
+        _confirmAction = confirmAction;
 
   Future<String> run(NexusAction action) async {
     // Defense in depth: the brains already skip disabled actions, but refuse
@@ -84,6 +114,8 @@ class NexusActionRunner {
         return _openEmail();
       case NexusCommand.navigate:
         return _navigate(action);
+      case NexusCommand.assistApp:
+        return _assistApp(action);
       case NexusCommand.unknown:
         return action.reply;
     }
@@ -520,5 +552,158 @@ class NexusActionRunner {
     }
 
     return 'I couldn\'t find a maps app to start navigation on this device.';
+  }
+
+  // -----------------------------------------------------------------------
+  // Assist with other apps (accessibility service)
+  // -----------------------------------------------------------------------
+
+  Future<String> _assistApp(NexusAction action) async {
+    // Guard: only works on Android
+    if (!Platform.isAndroid) {
+      return 'Assisting with other apps is only available on Android.';
+    }
+
+    // Guard: requires LLM (KeywordBrain can't reason about screen trees)
+    final actionType = action.args['actionType'] as String? ?? 'tap';
+    final elementDesc = action.args['elementDescription'] as String? ?? '';
+    final textToType = action.args['text'] as String? ?? '';
+    final packageName = action.args['package'] as String? ?? '';
+
+    // Guard: accessibility service must be running
+    final a11y = AccessibilityService.instance;
+    if (!a11y.serviceRunning.value) {
+      return 'Nexus needs the Accessibility service to read the screen. '
+          'Enable it in Settings → Actions & permissions → Assist with other '
+          'apps, then turn on the system accessibility toggle for Nexus.';
+    }
+
+    // Read the screen tree
+    final screenTree = await a11y.getScreenTree();
+    if (screenTree == null) {
+      return 'I couldn\'t read the current screen. Make sure another app is '
+          'open in the foreground.';
+    }
+    // Parse the screen tree and find the best-matching element
+    final plan = _matchElement(
+      screenTree: screenTree,
+      actionType: actionType,
+      elementDesc: elementDesc,
+      textToType: textToType,
+      packageName: packageName,
+    );
+
+    if (plan == null) {
+      return 'I couldn\'t find "$elementDesc" on the current screen. '
+          'Try describing it differently — for example "the Send button" or '
+          '"the search field".';
+    }
+
+    // Confirmation: show the user exactly what will happen and require
+    // explicit approval. This is the ONLY way to execute — no bypass.
+    final confirm = _confirmAction;
+    if (confirm != null) {
+      final approved = await confirm(plan);
+      if (!approved) {
+        return 'Cancelled — no action taken.';
+      }
+    } else {
+      // No confirmation callback available (e.g. headless/test mode) —
+      // refuse to act rather than skip the safety gate.
+      return 'Confirmation is required but unavailable right now. '
+          'Please try again from the Talk screen.';
+    }
+
+    // Execute the action
+    bool success;
+    if (actionType == 'type') {
+      success = await a11y.typeIntoElement(
+        screenTree: screenTree,
+        elementId: plan.elementId,
+        text: textToType,
+      );
+    } else {
+      success = await a11y.tapElement(
+        screenTree: screenTree,
+        elementId: plan.elementId,
+      );
+    }
+
+    if (success) {
+      final verb = actionType == 'type' ? 'Typed into' : 'Tapped';
+      return '$verb "${plan.description}" successfully.';
+    }
+    return 'The action didn\'t complete — the element may have moved or '
+        'the screen changed. Try again.';
+  }
+
+  /// Matches the LLM's description of what to interact with against the
+  /// screen tree elements. Returns an [AssistAppPlan] if a match is found,
+  /// or null if nothing matches.
+  AssistAppPlan? _matchElement({
+    required String screenTree,
+    required String actionType,
+    required String elementDesc,
+    required String textToType,
+    required String packageName,
+  }) {
+    try {
+      final parsed = jsonDecode(screenTree) as Map<String, dynamic>;
+      final elements = (parsed['elements'] as List?) ?? [];
+      final foregroundPackage = (parsed['packageName'] as String?) ?? '';
+
+      if (elements.isEmpty) return null;
+
+      final descLower = elementDesc.toLowerCase();
+      int bestIndex = -1;
+      int bestScore = -1;
+
+      for (var i = 0; i < elements.length; i++) {
+        final el = elements[i] as Map<String, dynamic>;
+        final text = (el['text'] as String?)?.toLowerCase() ?? '';
+        final desc = (el['contentDescription'] as String?)?.toLowerCase() ?? '';
+        final role = (el['role'] as String?)?.toLowerCase() ?? '';
+
+        var score = 0;
+        // Exact text match
+        if (text == descLower || desc == descLower) score += 10;
+        // Text contains the description
+        if (text.contains(descLower)) score += 5;
+        if (desc.contains(descLower)) score += 5;
+        // Description contains the text
+        if (descLower.contains(text) && text.isNotEmpty) score += 4;
+        // Role matches (e.g. "button" in "the Send button")
+        if (descLower.contains(role) && role.isNotEmpty) score += 2;
+        // Prefer interactive elements
+        if (el['clickable'] == true) score += 1;
+        if (actionType == 'type' && el['editable'] == true) score += 3;
+
+        if (score > bestScore) {
+          bestScore = score;
+          bestIndex = i;
+        }
+      }
+
+      if (bestIndex < 0 || bestScore < 2) return null;
+
+      final el = elements[bestIndex] as Map<String, dynamic>;
+      final elText = (el['text'] as String?) ?? elementDesc;
+      final elPackage = (el['package'] as String?) ?? foregroundPackage;
+
+      final description = actionType == 'type'
+          ? "Nexus wants to type \"$textToType\" into \"$elText\" in $elPackage"
+          : "Nexus wants to tap \"$elText\" in $elPackage";
+
+      return AssistAppPlan(
+        description: description,
+        screenTree: screenTree,
+        elementId: bestIndex,
+        actionType: actionType,
+        textToType: actionType == 'type' ? textToType : null,
+        packageName: elPackage,
+      );
+    } catch (_) {
+      return null;
+    }
   }
 }

@@ -10,6 +10,7 @@ enum NexusCommand {
   callContact,
   openEmail,
   navigate,
+  assistApp,
   unknown,
 }
 

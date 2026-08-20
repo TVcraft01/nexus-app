@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="accessibility_service_description">Allows Nexus to read the currently visible screen and perform a single user-requested action (tap or type) in another app. This is used only when you explicitly ask Nexus to help with something in a specific app. Nexus reads the screen locally and never sends its contents anywhere.</string>
+</resources>

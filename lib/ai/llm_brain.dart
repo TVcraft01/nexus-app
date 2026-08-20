@@ -172,6 +172,11 @@ class LlmBrain implements NexusBrain {
         'For setTimer put args.duration={"unit":"minutes"|"seconds"|"hours","amount":N}. '
         'For callContact put args.target with the name or number to call. '
         'For navigate put args.destination with the place to navigate to. '
+        'For assistApp: the user wants to interact with another app. '
+        'Put args.actionType as "tap" or "type". '
+        'Put args.elementDescription with a short description of the element to interact with (e.g. "the Send button"). '
+        'For type actions, also put args.text with the text to type. '
+        'Put args.package with the target app package name if known. '
         'For anything else use command "chat" and write your helpful answer in reply.';
 
     try {
@@ -431,6 +436,30 @@ class LlmBrain implements NexusBrain {
           command: NexusCommand.navigate,
           reply: reply.isEmpty ? 'Opening navigation…' : reply,
           args: {'destination': destination},
+        );
+      }
+      case 'assistapp': {
+        final actionType = (args['actionType'] as String?)?.toLowerCase().trim() ?? 'tap';
+        final elementDesc = (args['elementDescription'] as String?)?.trim() ?? '';
+        final text = (args['text'] as String?)?.trim() ?? '';
+        final package = (args['package'] as String?)?.trim() ?? '';
+        if (elementDesc.isEmpty) {
+          return NexusAction(
+            command: NexusCommand.assistApp,
+            reply: 'What would you like me to tap or type? For example '
+                '"tap Send in WhatsApp" or "type my name in this field".',
+            args: const {'needsDescription': true},
+          );
+        }
+        return NexusAction(
+          command: NexusCommand.assistApp,
+          reply: reply.isEmpty ? 'Let me look at the screen…' : reply,
+          args: {
+            'actionType': actionType,
+            'elementDescription': elementDesc,
+            'text': text,
+            'package': package,
+          },
         );
       }
       default:
