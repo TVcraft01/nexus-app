@@ -74,6 +74,21 @@
                 android:resource="@xml/accessibility_service_config" />
         </service>
 
+        <!-- Autofill service: supplies saved credentials to login forms.
+             Only active when the user explicitly enables Nexus as the system
+             autofill provider in Android Settings. -->
+        <service
+            android:name=".autofill.NexusAutofillService"
+            android:exported="true"
+            android:permission="android.permission.BIND_AUTOFILL_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.autofill.AutofillService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.autofill"
+                android:resource="@xml/autofill_service_config" />
+        </service>
+
         <!-- flutter_local_notifications receivers for scheduled reminders. -->
         <receiver
             android:exported="false"

@@ -28,6 +28,7 @@ import 'transfer/send_file_screen.dart';
 import 'transfer/transfer_service.dart';
 import 'math_notes/math_notes_service.dart';
 import 'read_aloud/read_aloud_service.dart';
+import 'vault/vault_screen.dart';
 import 'read_aloud/read_aloud_widget.dart';
 
 void main() {
@@ -337,6 +338,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
             voskService: _voskService,
             devicesProvider: () => _pairingService.getPairedDevices(),
           ),
+          const VaultScreen(),
           SettingsScreen(
             devices: _devices,
             receivedFiles: _receivedFiles,
@@ -361,6 +363,10 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
           NavigationDestination(
             icon: Icon(Icons.mic_none),
             label: 'Talk',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.lock_outline),
+            label: 'Vault',
           ),
           NavigationDestination(
             icon: Icon(Icons.settings),

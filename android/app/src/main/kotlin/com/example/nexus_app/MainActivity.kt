@@ -6,6 +6,7 @@ import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
+import com.example.nexus_app.autofill.NexusAutofillService
 
 class MainActivity : FlutterActivity() {
 
@@ -185,6 +186,33 @@ class MainActivity : FlutterActivity() {
                         }
                     } else {
                         result.error("SERVICE_NOT_RUNNING", "Accessibility service is not enabled", null)
+                    }
+                }
+                "syncAutofillCredentials" -> {
+                    // Receive credentials from Dart and cache them for the autofill service.
+                    // Passwords are held in memory only and never logged.
+                    @Suppress("UNCHECKED_CAST")
+                    val entries = call.argument<List<Map<String, String>>>("entries") ?: emptyList()
+                    val credentials = entries.map { map ->
+                        NexusAutofillService.CredentialEntry(
+                            name = map["name"] ?: "",
+                            username = map["username"] ?: "",
+                            password = map["password"] ?: ""
+                        )
+                    }
+                    NexusAutofillService.credentialCache = credentials
+                    result.success(true)
+                }
+                "clearAutofillCredentials" -> {
+                    NexusAutofillService.clearCredentialCache()
+                    result.success(true)
+                }
+                "openAutofillSettings" -> {
+                    try {
+                        startActivity(Intent(Settings.ACTION_REQUEST_SET_AUTOFILL_SERVICE))
+                        result.success(true)
+                    } catch (e: Exception) {
+                        result.error("FAILED", e.message, null)
                     }
                 }
                 else -> result.notImplemented()

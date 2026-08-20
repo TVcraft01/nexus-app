@@ -32,6 +32,8 @@ dependencies:
   open_filex: ^4.4.0   # opens received files with the platform's default app
   flutter_contacts: ^2.3.1  # resolves a spoken contact name to a phone number
   workmanager: ^0.10.8  # Android periodic background maintenance (idle + charging)
+  flutter_secure_storage: ^11.0.0  # hardware-backed Keystore for vault secrets
+  local_auth: ^2.3.0  # biometric/PIN gate for vault access
 
 dev_dependencies:
   flutter_test:
