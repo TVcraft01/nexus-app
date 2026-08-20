@@ -66,14 +66,15 @@ class NexusAccessibilityService : AccessibilityService() {
         }
     }
 
-    // ---- Math notes: result chip (tappable, no auto-insert) ----------------
+    // ---- Math notes: automatic result delivery -----------------------------
 
-    private var lastExtraction: MathExpressionEvaluator.Extraction? = null
+    private val reTriggerGuard = MathReTriggerGuard()
     private var resultChipRoot: android.widget.LinearLayout? = null
     private var resultChipResultView: android.widget.TextView? = null
     private var resultChipNoteView: android.widget.TextView? = null
     private var resultChipParams: android.view.WindowManager.LayoutParams? = null
     private var resultChipPackage: String? = null
+    private var resultChipGeneration = 0
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -111,10 +112,10 @@ class NexusAccessibilityService : AccessibilityService() {
                 }
             }
             AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED -> {
-                // Math notes: listen for text changes in editable fields.
-                // SAFEGUARD ORDERING: password/financial checks happen BEFORE
-                // any text content is read — this is the privacy guarantee.
-                if (mathNotesEnabled) {
+                // Math notes: the suppression half of the re-trigger guard is
+                // checked before reading any text. This drops the immediate
+                // event caused by Nexus's own ACTION_SET_TEXT call.
+                if (mathNotesEnabled && !reTriggerGuard.isWithinSuppressionWindow()) {
                     handleMathNotes(event)
                 }
             }
@@ -158,8 +159,26 @@ class NexusAccessibilityService : AccessibilityService() {
                 ?: event.text?.joinToString("")
                 ?: return
 
-            val bounds = android.graphics.Rect()
-            source.getBoundsInScreen(bounds)
+            // Delayed rich-editor events can re-deliver the expression or a
+            // prefix of the text Nexus just inserted. This check happens only
+            // after the password/financial safeguards and text read above.
+            if (reTriggerGuard.isDuplicateOfRecentAction(text)) {
+                source.recycle()
+                return
+            }
+
+            // Deleting the inserted result is user input, not a new calculation.
+            // This prevents the old "2+2 = = 4" behavior.
+            if (event.removedCount > 0 && event.addedCount == 0) {
+                dismissResultChip()
+                source.recycle()
+                return
+            }
+
+            // Any new user edit dismisses the previous visual result. The
+            // expression is extracted from the END, so preceding prose remains
+            // intact when the automatic insertion happens.
+            dismissResultChip()
 
             // Evaluate the expression at the END of the text (works even with
             // preceding prose like "note: 12+8="), directly on the Kotlin side.
@@ -167,9 +186,6 @@ class NexusAccessibilityService : AccessibilityService() {
                 CurrencyRates.rateFor(sym)
             }
             if (extraction != null && extraction.result.unavailableReason != null) {
-                // e.g. currency rates not fetched yet — honest note, and kick
-                // a fetch so the next attempt works.
-                dismissResultChip()
                 try {
                     android.widget.Toast.makeText(
                         this,
@@ -182,14 +198,9 @@ class NexusAccessibilityService : AccessibilityService() {
                 return
             }
 
-            val packageNameForChip = packageName
             if (extraction != null) {
-                lastExtraction = extraction
-                resultChipPackage = packageNameForChip
-                showResultChip(extraction.result, bounds)
-            } else {
-                lastExtraction = null
-                dismissResultChip()
+                resultChipPackage = packageName
+                deliverMathResult(extraction, text, source)
             }
             source.recycle()
         } catch (e: Exception) {
@@ -225,36 +236,94 @@ class NexusAccessibilityService : AccessibilityService() {
     // -----------------------------------------------------------------------
 
     /**
-     * Shows the result as a small tappable chip in the keyboard's suggestion
-     * area (the space where word suggestions appear), Apple-Math-Notes style.
-     * Nothing is auto-inserted — the user taps the chip to insert the result
-     * into the field, or (if the field can't take text) to copy it.
-     *
-     * Only the result value (a number) is logged, never the typed expression.
+     * Delivers the result without requiring a tap. Editable fields that expose
+     * ACTION_SET_TEXT are updated immediately; unsupported fields receive the
+     * same automatic clipboard fallback as before.
      */
-    private fun showResultChip(result: MathExpressionEvaluator.MathResult, fieldBounds: android.graphics.Rect) {
+    private fun deliverMathResult(
+        extraction: MathExpressionEvaluator.Extraction,
+        originalText: String,
+        source: AccessibilityNodeInfo,
+    ) {
+        val result = extraction.result
+        val bounds = android.graphics.Rect()
+        source.getBoundsInScreen(bounds)
+        showResultChip(result, bounds)
+
+        val supportsDirectInsert = try {
+            source.isEditable &&
+                source.actionList.any { it.id == AccessibilityNodeInfo.ACTION_SET_TEXT }
+        } catch (_: Exception) {
+            false
+        }
+
+        if (supportsDirectInsert) {
+            val start = extraction.startIndex.coerceIn(0, originalText.length)
+            val newText = originalText.substring(0, start) +
+                result.expression + " = " + result.formatted
+            // Record before ACTION_SET_TEXT: immediate and delayed editor events
+            // must be recognized as Nexus's own insertion.
+            reTriggerGuard.noteInsert(result.expression, newText)
+            val args = Bundle().apply {
+                putCharSequence(
+                    AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
+                    newText
+                )
+            }
+            val inserted = try {
+                source.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+            } catch (_: Exception) {
+                false
+            }
+            if (inserted) {
+                Log.d(TAG, "Math notes: result ${result.formatted} delivered via auto-insert")
+                scheduleResultChipDismiss(1400L)
+                return
+            }
+        }
+
+        // Rich editors without ACTION_SET_TEXT: copy immediately and keep a
+        // brief visual confirmation. It dismisses automatically; no tap needed.
+        copyToClipboard(result.formatted)
+        resultChipResultView?.text = "= ${result.formatted} · copied"
+        resultChipNoteView?.visibility = android.view.View.GONE
+        scheduleResultChipDismiss(3500L)
+        Log.d(TAG, "Math notes: result ${result.formatted} delivered via clipboard + overlay")
+    }
+
+    /** Shows a subtle, non-interactive pill in the keyboard suggestion area. */
+    private fun showResultChip(
+        result: MathExpressionEvaluator.MathResult,
+        fieldBounds: android.graphics.Rect,
+    ) {
         try {
             val wm = getSystemService(android.content.Context.WINDOW_SERVICE) as android.view.WindowManager
             val rateNote = if (result.isConversion) rateNoteFor(result) else null
 
             if (resultChipRoot == null) {
                 val resultTv = android.widget.TextView(this).apply {
-                    textSize = 16f
-                    setTextColor(android.graphics.Color.parseColor("#1565C0"))
+                    textSize = 15f
+                    setTextColor(android.graphics.Color.parseColor("#1F2937"))
                     setTypeface(typeface, android.graphics.Typeface.BOLD)
-                    setPadding(20, 8, 20, 0)
+                    setPadding(dp(16), dp(9), dp(16), if (rateNote == null) dp(9) else dp(3))
                 }
                 val noteTv = android.widget.TextView(this).apply {
-                    textSize = 12f
-                    setTextColor(android.graphics.Color.parseColor("#5C6BC0"))
-                    setPadding(20, 0, 20, 8)
+                    textSize = 11f
+                    setTextColor(android.graphics.Color.parseColor("#64748B"))
+                    setPadding(dp(16), 0, dp(16), dp(8))
                 }
                 val layout = android.widget.LinearLayout(this).apply {
                     orientation = android.widget.LinearLayout.VERTICAL
-                    setBackgroundColor(android.graphics.Color.parseColor("#E3F2FD"))
+                    background = android.graphics.drawable.GradientDrawable().apply {
+                        shape = android.graphics.drawable.GradientDrawable.RECTANGLE
+                        cornerRadius = dp(22).toFloat()
+                        setColor(android.graphics.Color.argb(244, 248, 250, 252))
+                        setStroke(dp(1), android.graphics.Color.argb(35, 31, 41, 55))
+                    }
+                    elevation = dp(4).toFloat()
+                    alpha = 0f
                     addView(resultTv)
                     addView(noteTv)
-                    setOnClickListener { onResultChipTapped() }
                 }
                 val params = android.view.WindowManager.LayoutParams(
                     android.view.WindowManager.LayoutParams.WRAP_CONTENT,
@@ -265,6 +334,7 @@ class NexusAccessibilityService : AccessibilityService() {
                         @Suppress("DEPRECATION")
                         android.view.WindowManager.LayoutParams.TYPE_PHONE,
                     android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                        android.view.WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
                         android.view.WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
                     android.graphics.PixelFormat.TRANSLUCENT
                 ).apply {
@@ -277,6 +347,7 @@ class NexusAccessibilityService : AccessibilityService() {
                 resultChipResultView = resultTv
                 resultChipNoteView = noteTv
                 resultChipParams = params
+                layout.animate().alpha(1f).setDuration(160L).start()
             } else {
                 resultChipParams?.let { p ->
                     p.x = fieldBounds.left.coerceAtLeast(0)
@@ -286,13 +357,13 @@ class NexusAccessibilityService : AccessibilityService() {
             }
 
             resultChipResultView?.text = "= ${result.formatted}"
-            val note = rateNote
             resultChipNoteView?.let {
-                it.text = note
-                it.visibility = if (note == null) android.view.View.GONE else android.view.View.VISIBLE
+                it.text = rateNote
+                it.visibility = if (rateNote == null) android.view.View.GONE else android.view.View.VISIBLE
             }
         } catch (e: Exception) {
-            // "Display over other apps" not granted: fall back to a Toast.
+            // Without overlay permission, Toast still provides a self-dismissing
+            // visual result while direct insertion continues independently.
             dismissResultChip()
             try {
                 android.widget.Toast.makeText(this, "= ${result.formatted}", android.widget.Toast.LENGTH_LONG).show()
@@ -337,85 +408,25 @@ class NexusAccessibilityService : AccessibilityService() {
         }
     }
 
-    /** Tap on the chip: insert the result into the field, or copy it. */
-    private fun onResultChipTapped() {
-        val extraction = lastExtraction ?: return
-        val result = extraction.result
-        val node = findFocusedEditable()
-        if (node == null) {
-            copyToClipboard(result.formatted)
-            showChipCopied(result.formatted)
-            return
-        }
-        try {
-            val supportsInsert = node.isEditable &&
-                node.actionList.any { it.id == AccessibilityNodeInfo.ACTION_SET_TEXT }
-            if (supportsInsert) {
-                val fullText = node.text?.toString() ?: ""
-                val start = extraction.startIndex.coerceIn(0, fullText.length)
-                val newText = fullText.substring(0, start) +
-                    result.expression + " = " + result.formatted
-                val args = Bundle().apply {
-                    putCharSequence(
-                        AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
-                        newText
-                    )
-                }
-                if (node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)) {
-                    Log.d(TAG, "Math notes: ${result.formatted} inserted on tap")
-                    dismissResultChip()
-                    return
-                }
-            }
-            copyToClipboard(result.formatted)
-            showChipCopied(result.formatted)
-        } catch (e: Exception) {
-            copyToClipboard(result.formatted)
-            showChipCopied(result.formatted)
-        } finally {
-            try { node.recycle() } catch (_: Exception) {}
-        }
-    }
-
-    /** Finds the focused editable node in the active window, if any. */
-    private fun findFocusedEditable(): AccessibilityNodeInfo? {
-        val root = rootInActiveWindow ?: return null
-        val found = findFocusedEditableIn(root)
-        if (found == null) root.recycle()
-        return found
-    }
-
-    private fun findFocusedEditableIn(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
-        if (node.isFocused && node.isEditable) return node
-        for (i in 0 until node.childCount) {
-            val child = node.getChild(i) ?: continue
-            val found = findFocusedEditableIn(child)
-            if (found != null) return found
-            child.recycle()
-        }
-        return null
-    }
-
-    private fun showChipCopied(result: String) {
-        resultChipResultView?.text = "= $result · copied"
-        resultChipNoteView?.visibility = android.view.View.GONE
+    private fun scheduleResultChipDismiss(delayMs: Long) {
+        val generation = resultChipGeneration
         android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-            dismissResultChip()
-        }, 2500)
+            if (generation == resultChipGeneration) dismissResultChip()
+        }, delayMs)
     }
 
     private fun dismissResultChip() {
         val view = resultChipRoot ?: return
+        resultChipGeneration++
         resultChipRoot = null
         resultChipResultView = null
         resultChipNoteView = null
         resultChipParams = null
         resultChipPackage = null
-        lastExtraction = null
-        try {
-            val wm = getSystemService(android.content.Context.WINDOW_SERVICE) as android.view.WindowManager
-            wm.removeView(view)
-        } catch (_: Exception) {}
+        val wm = getSystemService(android.content.Context.WINDOW_SERVICE) as android.view.WindowManager
+        view.animate().alpha(0f).setDuration(140L).withEndAction {
+            try { wm.removeView(view) } catch (_: Exception) {}
+        }.start()
     }
 
     private fun copyToClipboard(result: String) {

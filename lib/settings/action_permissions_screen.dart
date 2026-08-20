@@ -509,8 +509,9 @@ class _MathNotesToggleState extends State<_MathNotesToggle> {
           title: const Text('Math notes'),
           subtitle: const Text(
               'When you type a simple expression ending with = (like 12+8=), '
-              'Nexus shows the result in a small chip above the keyboard — '
-              'tap it to insert the answer into the field, or copy it. Works '
+              'Nexus shows the result in a small, fading pill above the keyboard '
+              'and automatically inserts it when the field supports it; otherwise '
+              'it copies the result and dismisses itself. Works '
               'even when there is text before the expression, with ÷ × x, '
               '²/^ and %, plus conversions like 10€ in \$ =. Password fields '
               'and financial apps are always skipped. Off by default.'),
@@ -531,8 +532,9 @@ class _MathNotesToggleState extends State<_MathNotesToggle> {
                       SizedBox(width: 8),
                       Expanded(
                         child: Text(
-                          'Results appear in a small chip above the keyboard; '
-                          'tap it to insert or copy the answer.',
+                          'Results appear in a subtle fading pill above the keyboard '
+                          'and insert automatically when supported; otherwise they '
+                          'are copied and dismissed automatically.',
                           style: TextStyle(fontSize: 12),
                         ),
                       ),
