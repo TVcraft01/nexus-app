@@ -53,7 +53,7 @@ class NatKeepAlive {
   bool _running = false;
 
   /// Pending STUN response waiters keyed by hex-encoded transaction id
-  /// (List<int> doesn't have value equality in Dart maps).
+  /// (`List<int>` doesn't have value equality in Dart maps).
   final Map<String, Completer<NatEndpoint?>> _pendingStun = {};
 
   /// The public UDP endpoint discovered by STUN, or null if no binding

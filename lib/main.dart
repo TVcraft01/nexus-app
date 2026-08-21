@@ -143,6 +143,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       } catch (e, st) {
         // ignore: avoid_print
         print('[REMOTE] setEnabled error: $e');
+        // ignore: avoid_print
         print('[REMOTE] stack: $st');
       }
     }
