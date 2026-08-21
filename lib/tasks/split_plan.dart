@@ -4,9 +4,12 @@
 library;
 
 /// How much work a tier can take relative to Compact. Rough, not optimal —
-/// a Large device gets three times the share of a Compact one.
+/// a Large device gets three times the share of a Compact one, and the Tiny
+/// 0.5B model takes half a Compact share.
 double tierWeight(String? tierId) {
   switch (tierId) {
+    case 'tiny':
+      return 0.5;
     case 'balanced':
       return 2.0;
     case 'large':

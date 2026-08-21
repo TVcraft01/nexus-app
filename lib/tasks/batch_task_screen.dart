@@ -412,6 +412,8 @@ class _BatchTaskScreenState extends State<BatchTaskScreen> {
 
   String _tierLabel(String tierId) {
     switch (tierId) {
+      case 'tiny':
+        return 'Tiny';
       case 'balanced':
         return 'Balanced';
       case 'large':

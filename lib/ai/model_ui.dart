@@ -3,6 +3,15 @@ import 'package:flutter/material.dart';
 import 'model_service.dart';
 import 'model_tiers.dart';
 
+/// Human-readable free-RAM requirement. The Tiny tier needs under a gigabyte,
+/// so it is shown in MB rather than rounding down to a misleading "~0 GB".
+String _freeRamLabel(int bytes) {
+  if (bytes >= 1024 * 1024 * 1024) {
+    return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(1)} GB';
+  }
+  return '${(bytes / (1024 * 1024)).round()} MB';
+}
+
 /// Asks the user which model tier to download. Returns null if they cancel.
 /// [recommended] gets a "Recommended" badge.
 Future<ModelTier?> pickModelTier(
@@ -35,7 +44,7 @@ Future<ModelTier?> pickModelTier(
               ),
               subtitle: Text(
                 '${tier.description}\nDownload ${tier.sizeLabel}, needs '
-                '~${tier.minFreeRamBytes ~/ (1024 * 1024 * 1024)} GB free RAM',
+                '~${_freeRamLabel(tier.minFreeRamBytes)} free RAM',
               ),
               isThreeLine: true,
             ),

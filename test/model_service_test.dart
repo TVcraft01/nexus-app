@@ -126,11 +126,19 @@ void main() {
           freeDiskBytes: freeDisk,
         );
 
-    test('returns null when free RAM is below the compact threshold', () {
-      expect(pickTierFor(cap(freeRam: 2 * gb, freeDisk: 100 * gb)), isNull);
+    test('returns null when free RAM is below even the Tiny threshold', () {
+      expect(
+        pickTierFor(cap(freeRam: 512 * 1024 * 1024, freeDisk: 100 * gb)),
+        isNull,
+      );
     });
 
-    test('offers Compact when only the smallest tier fits', () {
+    test('offers Tiny on a low-RAM small ARM device', () {
+      // 2 GB free RAM: fits Tiny (768 MB) but not Compact (3 GB).
+      expect(pickTierFor(cap(freeRam: 2 * gb, freeDisk: 100 * gb))?.id, 'tiny');
+    });
+
+    test('offers Compact when only Compact-and-below fit', () {
       // 3.5 GB free RAM: fits Compact (3 GB) but not Balanced (4 GB).
       expect(pickTierFor(cap(freeRam: 7 * gb ~/ 2, freeDisk: 100 * gb))?.id,
           'compact');

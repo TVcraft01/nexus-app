@@ -6,6 +6,7 @@ import 'package:nexus_app/tasks/task_protocol.dart';
 void main() {
   group('tierWeight', () {
     test('maps tiers to increasing weights', () {
+      expect(tierWeight('tiny'), 0.5);
       expect(tierWeight('compact'), 1.0);
       expect(tierWeight('balanced'), 2.0);
       expect(tierWeight('large'), 3.0);

@@ -28,6 +28,18 @@ class ModelTier {
     required this.contextSize,
   });
 
+  static const tiny = ModelTier(
+    id: 'tiny',
+    name: 'Tiny',
+    description:
+        'Qwen2.5 0.5B, Q4_K_M — fits Raspberry Pi and small ARM devices',
+    downloadUrl:
+        'https://huggingface.co/bartowski/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/Qwen2.5-0.5B-Instruct-Q4_K_M.gguf',
+    sizeBytes: 397808192, // ~379 MB (~0.4 GB)
+    minFreeRamBytes: 768 * 1024 * 1024, // 768 MB free RAM (a 1 GB Pi fits)
+    contextSize: 2048,
+  );
+
   static const compact = ModelTier(
     id: 'compact',
     name: 'Compact',
@@ -61,7 +73,7 @@ class ModelTier {
     contextSize: 8192,
   );
 
-  static const all = [compact, balanced, large];
+  static const all = [tiny, compact, balanced, large];
 
   /// The download must also fit on disk (leave 1.5x the model size free).
   int get minFreeDiskBytes => (sizeBytes * 1.5).round();

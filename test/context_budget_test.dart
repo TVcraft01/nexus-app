@@ -8,7 +8,8 @@ import 'package:nexus_app/tasks/task_coordinator.dart';
 void main() {
   group('contentCharBudget', () {
     test('reserves prompt overhead before budgeting file content', () {
-      // Compact: 2048 tokens - 96 overhead = 1952 usable * 4 chars = 7808.
+      // Tiny/Compact: 2048 tokens - 96 overhead = 1952 usable * 4 chars = 7808.
+      expect(contentCharBudget(ModelTier.tiny.contextSize), 7808);
       expect(contentCharBudget(ModelTier.compact.contextSize), 7808);
       expect(contentCharBudget(ModelTier.balanced.contextSize), 16000);
       expect(contentCharBudget(ModelTier.large.contextSize), 32384);

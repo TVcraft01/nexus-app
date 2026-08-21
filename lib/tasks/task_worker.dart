@@ -33,7 +33,7 @@ class TaskWorker {
     return canLoadTierWithFreeRam(tier, await readFreeRamBytes());
   }
 
-  /// The installed tier id ('compact'/'balanced'/'large'), or null if none.
+  /// The installed tier id ('tiny'/'compact'/'balanced'/'large'), or null if none.
   String? get tierId => isAvailable ? modelService.tier?.id : null;
 
   LlmBrain _ensureBrain() {
