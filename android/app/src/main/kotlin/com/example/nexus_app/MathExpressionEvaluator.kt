@@ -41,11 +41,12 @@ object MathExpressionEvaluator {
         val unavailableReason: String? = null,
     )
 
-    /** A recognized expression plus where it begins in the original text, so
-     *  the caller can splice the result in over exactly that range. */
+    /** A recognized expression plus the span it occupies in the original text,
+     *  so the caller can replace exactly that range with the result. */
     data class Extraction(
         val result: MathResult,
         val startIndex: Int,
+        val endIndex: Int, // exclusive
     )
 
     private val trailingEquals = Regex("=\\s*$")
@@ -142,8 +143,17 @@ object MathExpressionEvaluator {
         if (expr.isEmpty()) return null
         val startIndex = i + 1 + leadingWs
 
+        // Include trailing whitespace after the trigger (e.g. "12+8=  ").
+        val endIndex = if (hasTrailingEquals) {
+            var k = j + 1
+            while (k < text.length && text[k].isWhitespace()) k++
+            k
+        } else {
+            j + 1
+        }
+
         val result = evaluateExpression(expr, rateProvider) ?: return null
-        return Extraction(result, startIndex)
+        return Extraction(result, startIndex, endIndex)
     }
 
     /** Evaluates an already-extracted expression (no trailing '=' expected). */

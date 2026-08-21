@@ -310,4 +310,57 @@ class MathExpressionEvaluatorTest {
             e.result.expression + " = " + e.result.formatted
         assertEquals("total: 3*4 = 12", inserted)
     }
+
+    // ---- span replacement: startIndex..endIndex → result only ---------------
+
+    @Test
+    fun plainExpressionReplacedExactly() {
+        // "12+8=" must become "20", nothing else.
+        val text = "12+8="
+        val e = MathExpressionEvaluator.extractAndEvaluate(text)
+        assertNotNull(e)
+        val result = text.substring(0, e!!.startIndex) +
+            e.result.formatted + text.substring(e.endIndex)
+        assertEquals("20", result)
+    }
+
+    @Test
+    fun midSentencePreservesLeadingText() {
+        val text = "total: 3*4="
+        val e = MathExpressionEvaluator.extractAndEvaluate(text)
+        assertNotNull(e)
+        val result = text.substring(0, e!!.startIndex) +
+            e.result.formatted + text.substring(e.endIndex)
+        assertEquals("total: 12", result)
+    }
+
+    @Test
+    fun trailingWhitespaceAfterEqualsIncludedInSpan() {
+        val text = "12+8=  "
+        val e = MathExpressionEvaluator.extractAndEvaluate(text)
+        assertNotNull(e)
+        val result = text.substring(0, e!!.startIndex) +
+            e.result.formatted + text.substring(e.endIndex)
+        assertEquals("20", result)
+    }
+
+    @Test
+    fun currencyConversionReplacesFullSpan() {
+        val text = "price: 10€ in $ ="
+        val e = MathExpressionEvaluator.extractAndEvaluate(text, testRates)
+        assertNotNull(e)
+        val result = text.substring(0, e!!.startIndex) +
+            e.result.formatted + text.substring(e.endIndex)
+        assertEquals("price: 10.87 $", result)
+    }
+
+    @Test
+    fun leadingTextPreservedAndExpressionReplaced() {
+        val text = "note: 5*4="
+        val e = MathExpressionEvaluator.extractAndEvaluate(text)
+        assertNotNull(e)
+        val result = text.substring(0, e!!.startIndex) +
+            e.result.formatted + text.substring(e.endIndex)
+        assertEquals("note: 20", result)
+    }
 }

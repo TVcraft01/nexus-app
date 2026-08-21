@@ -245,6 +245,7 @@ class NexusAccessibilityService : AccessibilityService() {
     ) {
         val result = extraction.result
         val start = extraction.startIndex.coerceIn(0, currentText.length)
+        val end = extraction.endIndex.coerceIn(start, currentText.length)
 
         // Record what Nexus plans to insert so the re-trigger guard can
         // suppress the immediate and delayed events caused by ACTION_SET_TEXT.
@@ -260,7 +261,7 @@ class NexusAccessibilityService : AccessibilityService() {
         val runnable = Runnable {
             pendingInsertRunnable = null
             // Re-read the live text — it may have changed since scheduling.
-            insertResultNumeric(start, result.formatted, pkg)
+            insertResultNumeric(start, end, result.formatted, pkg)
         }
         pendingInsertRunnable = runnable
         pendingInsertPackage = pkg
@@ -280,7 +281,7 @@ class NexusAccessibilityService : AccessibilityService() {
      * Writes the numeric result into the currently-focused editable field.
      * Falls back to clipboard if the node doesn't support ACTION_SET_TEXT.
      */
-    private fun insertResultNumeric(startIndex: Int, formatted: String, pkg: String) {
+    private fun insertResultNumeric(startIndex: Int, endIndex: Int, formatted: String, pkg: String) {
         try {
             // Walk up from the root to find the focused editable node.
             val root = rootInActiveWindow ?: return
@@ -292,7 +293,7 @@ class NexusAccessibilityService : AccessibilityService() {
 
             val supportsDirectInsert = try {
                 source.isEditable &&
-                    source.actionList.any { it.id == AccessibilityNodeInfo.ACTION_SET_TEXT }
+                source.actionList.any { it.id == AccessibilityNodeInfo.ACTION_SET_TEXT }
             } catch (_: Exception) {
                 false
             }
@@ -300,7 +301,8 @@ class NexusAccessibilityService : AccessibilityService() {
             if (supportsDirectInsert) {
                 val text = source.text?.toString() ?: return
                 val safeStart = startIndex.coerceIn(0, text.length)
-                val newText = text.substring(0, safeStart) + formatted
+                val safeEnd = endIndex.coerceIn(safeStart, text.length)
+                val newText = text.substring(0, safeStart) + formatted + text.substring(safeEnd)
                 val args = Bundle().apply {
                     putCharSequence(
                         AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
