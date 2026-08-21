@@ -278,7 +278,7 @@ class BatchSummaryCoordinator {
         'http://${device.ipAddress}:${TransferService.receivePort}/task',
       ));
       request.headers.set('content-type', 'application/octet-stream');
-      request.headers.set('x-nexus-key', device.pairingKey);
+      request.headers.set('x-nexus-key', device.authToken);
       request.add(encrypted);
       final response = await request.close().timeout(timeout);
       if (response.statusCode != 200) {

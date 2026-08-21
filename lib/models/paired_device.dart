@@ -30,6 +30,11 @@ class PairedDevice {
   /// key directly.
   final String transferKey;
 
+  /// base64 bearer token derived from [pairingKey] via HKDF. Sent in the
+  /// `x-nexus-key` header to authenticate requests. Deliberately distinct from
+  /// [transferKey] so a leaked auth token does not decrypt transferred data.
+  final String authToken;
+
   PairedDevice({
     required this.deviceId,
     required this.deviceName,
@@ -37,10 +42,12 @@ class PairedDevice {
     required this.port,
     required this.pairingKey,
     String? transferKey,
+    String? authToken,
     this.publicAddress,
     this.publicUdpEndpoint,
     this.platform,
-  }) : transferKey = transferKey ?? deriveTransferKeyBase64(pairingKey);
+  })  : transferKey = transferKey ?? deriveTransferKeyBase64(pairingKey),
+        authToken = authToken ?? deriveAuthTokenBase64(pairingKey);
 
   /// Turns this device's info into JSON — this JSON string is what actually
   /// gets embedded inside the QR code image.
@@ -51,6 +58,7 @@ class PairedDevice {
         'port': port,
         'pairingKey': pairingKey,
         'transferKey': transferKey,
+        'authToken': authToken,
         if (publicAddress != null) 'publicAddress': publicAddress,
         if (publicUdpEndpoint != null) 'publicUdpEndpoint': publicUdpEndpoint,
         if (platform != null) 'platform': platform,
@@ -66,6 +74,38 @@ class PairedDevice {
         port: json['port'] as int,
         pairingKey: json['pairingKey'] as String,
         transferKey: json['transferKey'] as String?,
+        authToken: json['authToken'] as String?,
+        publicAddress: json['publicAddress'] as String?,
+        publicUdpEndpoint: json['publicUdpEndpoint'] as String?,
+        platform: json['platform'] as String?,
+      );
+
+  /// The identity fields safe to send over the network during pairing.
+  /// Excludes all secret material ([pairingKey], [transferKey], [authToken]) —
+  /// those are established out-of-band via the QR code and derived locally.
+  Map<String, dynamic> toPublicJson() => {
+        'deviceId': deviceId,
+        'deviceName': deviceName,
+        'ipAddress': ipAddress,
+        'port': port,
+        if (publicAddress != null) 'publicAddress': publicAddress,
+        if (publicUdpEndpoint != null) 'publicUdpEndpoint': publicUdpEndpoint,
+        if (platform != null) 'platform': platform,
+      };
+
+  /// Rebuilds a peer from a [toPublicJson] payload plus the pairing key this
+  /// device already holds (read from the QR). The transfer key and auth token
+  /// are derived from that key, never received from the peer.
+  factory PairedDevice.fromPublicJson(
+    Map<String, dynamic> json, {
+    required String pairingKey,
+  }) =>
+      PairedDevice(
+        deviceId: json['deviceId'] as String,
+        deviceName: json['deviceName'] as String,
+        ipAddress: json['ipAddress'] as String,
+        port: json['port'] as int,
+        pairingKey: pairingKey,
         publicAddress: json['publicAddress'] as String?,
         publicUdpEndpoint: json['publicUdpEndpoint'] as String?,
         platform: json['platform'] as String?,
@@ -94,6 +134,7 @@ class PairedDevice {
         platform: platform ?? this.platform,
         // Re-derive whenever the pairing key changes, otherwise keep it.
         transferKey: pairingKey == null ? transferKey : null,
+        authToken: pairingKey == null ? authToken : null,
       );
 
   /// The device's platform family, resolved from the explicit [platform] field

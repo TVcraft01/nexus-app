@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:shelf/shelf.dart';
 import 'package:shelf/shelf_io.dart' as shelf_io;
 import 'package:uuid/uuid.dart';
+import '../crypto/pairing_proof.dart';
 import '../models/paired_device.dart';
 
 /// Handles everything about pairing two Nexus devices together:
@@ -80,26 +81,41 @@ class PairingService {
 
       final body = await request.readAsString();
       final Map<String, dynamic> json = jsonDecode(body);
-      final incoming = PairedDevice.fromJson(json);
 
-      // The scanning device must send back the exact pairingKey that was
-      // encoded in the QR code we're showing — proves it actually scanned
-      // OUR QR code and isn't some random device on the network guessing.
-      if (json['respondingToKey'] != thisDevice.pairingKey) {
-        return Response.forbidden('pairing key mismatch');
+      // The scanner sends only its PUBLIC identity — no secret material — plus
+      // an HMAC proof that it actually scanned our QR (it proves knowledge of
+      // the pairing key without ever transmitting it).
+      final deviceJson = json['device'] as Map<String, dynamic>?;
+      final proof = json['proof'] as String?;
+      if (deviceJson == null || proof == null) {
+        return Response.badRequest(body: 'missing device or proof');
       }
 
-      // Both devices must end up storing the SAME shared secret so they can
-      // later derive the same transfer-encryption key. The secret embedded in
-      // the QR code is the one both sides know, so we persist the peer using
-      // OUR key rather than the key the peer generated for itself.
-      final shared = incoming.copyWith(pairingKey: thisDevice.pairingKey);
-      await _saveDevice(shared);
-      onPaired(shared);
+      // Rebuild the peer using OUR QR pairing key as the shared secret (the
+      // key is never received from the wire — it was established via the QR).
+      final incoming = PairedDevice.fromPublicJson(
+        deviceJson,
+        pairingKey: thisDevice.pairingKey,
+      );
 
-      // Reply with our own identity so the scanning device saves us too.
-      return Response.ok(jsonEncode(thisDevice.toJson()),
-          headers: {'content-type': 'application/json'});
+      final expected = computePairingProof(
+        pairingKey: thisDevice.pairingKey,
+        scannerDeviceId: incoming.deviceId,
+        showerDeviceId: thisDevice.deviceId,
+      );
+      if (proof != expected) {
+        return Response.forbidden('pairing proof mismatch');
+      }
+
+      await _saveDevice(incoming);
+      onPaired(incoming);
+
+      // Reply with our PUBLIC identity (no pairing key / transfer key) so the
+      // scanner saves us using the key it already holds from the QR.
+      return Response.ok(
+        jsonEncode({'status': 'ok', 'device': thisDevice.toPublicJson()}),
+        headers: {'content-type': 'application/json'},
+      );
     });
 
     _server = await shelf_io.serve(handler, InternetAddress.anyIPv4, pairingPort);
@@ -119,12 +135,20 @@ class PairingService {
     final uri = Uri.parse(
         'http://${scannedDevice.ipAddress}:${scannedDevice.port}/pair');
 
+    // Prove we scanned the QR without sending the pairing key: an HMAC keyed
+    // by the QR secret, bound to both identities.
+    final proof = computePairingProof(
+      pairingKey: scannedDevice.pairingKey,
+      scannerDeviceId: thisDevice.deviceId,
+      showerDeviceId: scannedDevice.deviceId,
+    );
+
     final response = await http.post(
       uri,
       headers: {'content-type': 'application/json'},
       body: jsonEncode({
-        ...thisDevice.toJson(),
-        'respondingToKey': scannedDevice.pairingKey,
+        'device': thisDevice.toPublicJson(),
+        'proof': proof,
       }),
     );
 
@@ -132,7 +156,11 @@ class PairingService {
       throw Exception('Pairing failed: ${response.statusCode} ${response.body}');
     }
 
-    final confirmed = PairedDevice.fromJson(jsonDecode(response.body));
+    final json = jsonDecode(response.body) as Map<String, dynamic>;
+    final confirmed = PairedDevice.fromPublicJson(
+      json['device'] as Map<String, dynamic>,
+      pairingKey: scannedDevice.pairingKey, // the shared secret from the QR
+    );
     await _saveDevice(confirmed);
     return confirmed;
   }

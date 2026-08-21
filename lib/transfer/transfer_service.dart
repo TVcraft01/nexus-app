@@ -161,7 +161,7 @@ class TransferService {
   /// with the local model, and returns the encrypted results.
   Future<Response> _handleTask(Request request) async {
     final key = request.headers['x-nexus-key'] ?? '';
-    final device = await _deviceForPairingKey(key);
+    final device = await _deviceForAuthToken(key);
     if (device == null) {
       return Response.forbidden('device not paired');
     }
@@ -259,7 +259,7 @@ class TransferService {
     // in one encrypted round trip. Auth + encryption identical to /task.
     if (request.method == 'POST' && request.url.path == 'sync') {
       final key = request.headers['x-nexus-key'] ?? '';
-      final device = await _deviceForPairingKey(key);
+      final device = await _deviceForAuthToken(key);
       if (device == null) {
         return Response.forbidden('device not paired');
       }
@@ -273,7 +273,7 @@ class TransferService {
     // public endpoint so we can push the build artifact back to it.
     if (request.method == 'POST' && request.url.path == 'devtask') {
       final key = request.headers['x-nexus-key'] ?? '';
-      final device = await _deviceForPairingKey(key);
+      final device = await _deviceForAuthToken(key);
       if (device == null) {
         return Response.forbidden('device not paired');
       }
@@ -289,7 +289,7 @@ class TransferService {
     }
 
     final key = request.headers['x-nexus-key'] ?? '';
-    final device = await _deviceForPairingKey(key);
+    final device = await _deviceForAuthToken(key);
     if (device == null) {
       return Response.forbidden('device not paired');
     }
@@ -459,7 +459,7 @@ class TransferService {
       request.headers.set(
           'x-nexus-filename', Uri.encodeComponent(p.basename(file.path)));
       request.headers.set('x-nexus-sender', senderName);
-      request.headers.set('x-nexus-key', target.pairingKey);
+      request.headers.set('x-nexus-key', target.authToken);
       if (myPublic != null) {
         request.headers.set('x-nexus-public', myPublic);
       }
@@ -840,13 +840,14 @@ class TransferService {
 
   // ---- helpers ------------------------------------------------------------
 
-  Future<PairedDevice?> _deviceForPairingKey(String key) async {
+  Future<PairedDevice?> _deviceForAuthToken(String token) async {
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getStringList(_pairedKey) ?? [];
     for (final r in raw) {
-      final map = jsonDecode(r) as Map<String, dynamic>;
-      if (map['pairingKey'] == key) {
-        return PairedDevice.fromJson(map);
+      final device =
+          PairedDevice.fromJson(jsonDecode(r) as Map<String, dynamic>);
+      if (device.authToken == token) {
+        return device;
       }
     }
     return null;

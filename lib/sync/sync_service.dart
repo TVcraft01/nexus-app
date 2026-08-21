@@ -131,7 +131,7 @@ class SyncService {
           Uri.parse('http://${device.ipAddress}:$_receivePort/sync'),
         );
         request.headers.set('content-type', 'application/octet-stream');
-        request.headers.set('x-nexus-key', device.pairingKey);
+        request.headers.set('x-nexus-key', device.authToken);
         request.add(encrypted);
         final response = await request.close().timeout(const Duration(seconds: 10));
         if (response.statusCode != 200) {

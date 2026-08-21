@@ -43,7 +43,8 @@ class DevTaskResult {
 /// Sends a dev-task prompt to [device] over the encrypted channel.
 ///
 /// Mirrors the /task and /sync request shape: AES-GCM-encrypted body,
-/// authenticated by the pairing key in the `x-nexus-key` header. Also
+/// authenticated by the pairing-derived auth token in the `x-nexus-key`
+/// header. Also
 /// piggybacks our public endpoint so the PC can push the artifact back to us
 /// over the remote path when we're not on the same LAN.
 Future<DevTaskResult> sendDevTask({
@@ -63,7 +64,7 @@ Future<DevTaskResult> sendDevTask({
       'http://${device.ipAddress}:${port ?? TransferService.receivePort}/devtask',
     ));
     request.headers.set('content-type', 'application/octet-stream');
-    request.headers.set('x-nexus-key', device.pairingKey);
+    request.headers.set('x-nexus-key', device.authToken);
     if (myPublic != null && myPublic.isNotEmpty) {
       request.headers.set('x-nexus-public', myPublic);
     }
