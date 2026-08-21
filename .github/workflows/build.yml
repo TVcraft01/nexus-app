@@ -100,12 +100,19 @@ jobs:
         run: |
           cd artifacts/linux-bundle
           tar czf ../nexus-linux-x64.tar.gz .
+      - name: Compute short SHA
+        id: sha
+        run: echo "short=${GITHUB_SHA::8}" >> "$GITHUB_OUTPUT"
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.sha }}
-          name: 'Build ${{ github.sha }}'
-          body: 'Automated build from commit ${{ github.sha }}'
+          tag_name: v0.1.0-${{ steps.sha.outputs.short }}
+          name: 'v0.1.0 (${{ steps.sha.outputs.short }})'
+          body: |
+            Automated build from commit ${{ github.sha }}.
+
+            **Android:** Download `app-debug.apk` and install.
+            **Linux:** Download `nexus-linux-x64.tar.gz`, extract, and follow the update instructions in Settings > Check for updates.
           files: |
             artifacts/app-debug.apk
             artifacts/nexus-linux-x64.tar.gz
