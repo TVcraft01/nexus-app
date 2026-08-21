@@ -63,6 +63,14 @@ class MathExpressionEvaluatorTest {
     }
 
     @Test
+    fun negativeNumbersInExpressions() {
+        assertEquals("-2", eval("5+-7="))
+        assertEquals("20", eval("30+(-10)="))
+        assertEquals("-2", eval("3*-2+4="))
+        assertEquals("-6", eval("(-2)*3="))
+    }
+
+    @Test
     fun decimals() {
         assertEquals("1.5", eval("0.5+1="))
         assertEquals("2.5", eval("1.25*2="))

@@ -485,16 +485,12 @@ class _MathNotesToggleState extends State<_MathNotesToggle> {
 
   Future<void> _load() async {
     final enabled = await widget.settings.getMathNotes();
-    // Refresh the overlay-permission state (e.g. after the user returns from
-    // the OS "Display over other apps" screen).
-    await MathNotesService.instance.refreshOverlayPermission();
     if (mounted) setState(() => _enabled = enabled);
   }
 
   Future<void> _onToggle(bool v) async {
     await widget.settings.setMathNotes(v);
     await MathNotesService.instance.setEnabled(v);
-    await MathNotesService.instance.refreshOverlayPermission();
     if (mounted) setState(() => _enabled = v);
   }
 
@@ -509,65 +505,30 @@ class _MathNotesToggleState extends State<_MathNotesToggle> {
           title: const Text('Math notes'),
           subtitle: const Text(
               'When you type a simple expression ending with = (like 12+8=), '
-              'Nexus shows the result in a small, fading pill above the keyboard '
-              'and automatically inserts it when the field supports it; otherwise '
-              'it copies the result and dismisses itself. Works '
-              'even when there is text before the expression, with ÷ × x, '
-              '²/^ and %, plus conversions like 10€ in \$ =. Password fields '
-              'and financial apps are always skipped. Off by default.'),
+              'Nexus inserts the result number after a brief pause, like Apple '
+              'Math Notes. Works even when there is text before the expression, '
+              'with ÷ × x, ²/^ and %, plus conversions like 10€ in \$ =. Password '
+              'fields and financial apps are always skipped. Off by default.'),
           value: _enabled!,
           onChanged: _onToggle,
         ),
         if (_enabled == true)
-          ValueListenableBuilder<bool>(
-            valueListenable: MathNotesService.instance.canDrawOverlays,
-            builder: (context, canOverlay, _) {
-              if (canOverlay) {
-                return const Padding(
-                  padding: EdgeInsets.fromLTRB(56, 0, 16, 12),
-                  child: Row(
-                    children: [
-                      Icon(Icons.check_circle_outline,
-                          size: 16, color: Colors.green),
-                      SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          'Results appear in a subtle fading pill above the keyboard '
-                          'and insert automatically when supported; otherwise they '
-                          'are copied and dismissed automatically.',
-                          style: TextStyle(fontSize: 12),
-                        ),
-                      ),
-                    ],
+          const Padding(
+            padding: EdgeInsets.fromLTRB(56, 0, 16, 12),
+            child: Row(
+              children: [
+                Icon(Icons.check_circle_outline,
+                    size: 16, color: Colors.green),
+                SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Results insert automatically after a brief pause, like '
+                    'Apple Math Notes. No overlay or tap needed.',
+                    style: TextStyle(fontSize: 12),
                   ),
-                );
-              }
-              return Padding(
-                padding: const EdgeInsets.fromLTRB(56, 0, 16, 12),
-                child: Row(
-                  children: [
-                    const Icon(Icons.warning_amber_outlined,
-                        size: 16, color: Colors.orange),
-                    const SizedBox(width: 8),
-                    const Expanded(
-                      child: Text(
-                        'To show results over other apps, Android needs you '
-                        'to allow Nexus to display over other apps. Until '
-                        'then, results appear as a notification-style toast '
-                        'instead of an overlay.',
-                        style: TextStyle(fontSize: 12),
-                      ),
-                    ),
-                    TextButton(
-                      onPressed: () async {
-                        await MathNotesService.instance.openOverlaySettings();
-                      },
-                      child: const Text('Allow overlay'),
-                    ),
-                  ],
                 ),
-              );
-            },
+              ],
+            ),
           ),
       ],
     );
