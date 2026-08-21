@@ -18,6 +18,7 @@ import 'pairing/pairing_service.dart';
 import 'remote/remote_access_service.dart';
 import 'pairing/qr_pairing_screen.dart';
 import 'pairing/qr_scan_screen.dart';
+import 'settings/update_screen.dart';
 import 'settings/settings_screen.dart';
 import 'sync/knowledge_store.dart';
 import 'sync/sync_service.dart';
@@ -28,6 +29,7 @@ import 'transfer/send_file_screen.dart';
 import 'transfer/transfer_service.dart';
 import 'math_notes/math_notes_service.dart';
 import 'read_aloud/read_aloud_service.dart';
+import 'settings/update_service.dart';
 import 'vault/vault_screen.dart';
 import 'read_aloud/read_aloud_widget.dart';
 
@@ -114,6 +116,8 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     // Background maintenance: Android registers a constrained periodic task
     // (idle + charging); Linux runs it opportunistically right now if due.
     startMaintenanceScheduling();
+    // Check for updates on startup if auto-update is enabled.
+    _checkForUpdatesOnStartup();
     WidgetsBinding.instance.addObserver(this);
   }
 
@@ -129,6 +133,30 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
 
   /// Brings the opt-in remote-access service up to date: reads the toggle and,
   /// if enabled, opens a public port mapping + shares our public endpoint.
+  Future<void> _checkForUpdatesOnStartup() async {
+    final settings = SettingsService();
+    final autoUpdate = await settings.getAutoUpdate();
+    if (!autoUpdate || !mounted) return;
+    // Fire-and-forget: check silently, show a snackbar if an update exists.
+    final release = await UpdateService.checkForUpdate();
+    if (!mounted || release == null || !release.isNewer) return;
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Update available: ${release.name}'),
+        action: SnackBarAction(
+          label: 'View',
+          onPressed: () {
+            Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const UpdateScreen()),
+            );
+          },
+        ),
+        duration: const Duration(seconds: 6),
+      ),
+    );
+  }
+
   Future<void> _initRemoteAccess() async {
     final remote = RemoteAccessService.instance;
     final settings = SettingsService();

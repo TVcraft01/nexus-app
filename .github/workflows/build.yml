@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   actions: write
 
 jobs:
@@ -78,3 +78,36 @@ jobs:
         with:
           name: nexus-app-linux
           path: build/linux/x64/release/bundle
+
+  release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: [build-android, build-linux]
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download Android artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: nexus-app-debug-apk
+          path: artifacts/
+      - name: Download Linux artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: nexus-app-linux
+          path: artifacts/linux-bundle/
+      - name: Package Linux bundle
+        run: |
+          cd artifacts/linux-bundle
+          tar czf ../nexus-linux-x64.tar.gz .
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.sha }}
+          name: 'Build ${{ github.sha }}'
+          body: 'Automated build from commit ${{ github.sha }}'
+          files: |
+            artifacts/app-debug.apk
+            artifacts/nexus-linux-x64.tar.gz
+          make_latest: false
+          draft: false

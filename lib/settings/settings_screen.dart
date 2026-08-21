@@ -11,6 +11,7 @@ import '../sync/knowledge_store.dart';
 import '../transfer/transfer_service.dart';
 import 'action_permissions_screen.dart';
 import 'settings_service.dart';
+import 'update_screen.dart';
 
 /// The Settings tab: the internet/auto-update toggles, the paired-devices
 /// list with "Forget device", and a history of files this device received.
@@ -153,7 +154,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           SwitchListTile(
             title: const Text('Auto-update'),
-            subtitle: const Text('Off. Reserved for future updates.'),
+            subtitle: const Text(
+                'On = check for updates on startup. '
+                'Off = manual check only.'),
             secondary: const Icon(Icons.system_update_alt),
             value: _autoUpdate ?? false,
             onChanged: _autoUpdate == null
@@ -162,6 +165,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     await _settings.setAutoUpdate(v);
                     setState(() => _autoUpdate = v);
                   },
+          ),
+          ListTile(
+            leading: const Icon(Icons.update),
+            title: const Text('Check for updates'),
+            subtitle: const Text('See if a newer version is available'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const UpdateScreen()),
+              );
+            },
           ),
           const Divider(),
           _sectionHeader('Local assistant'),
