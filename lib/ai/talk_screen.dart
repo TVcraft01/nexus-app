@@ -9,6 +9,7 @@ import 'nexus_brain.dart';
 import 'message_kind.dart';
 import 'vosk_service.dart';
 import '../models/paired_device.dart';
+import '../brain/ai_brain_writer.dart';
 
 /// The "Talk to Nexus" entry point: type a command, or tap the mic and speak.
 /// Nexus decides what it means with the local brain (the downloaded LLM when
@@ -17,6 +18,7 @@ import '../models/paired_device.dart';
 class TalkScreen extends StatefulWidget {
   final ModelService modelService;
   final VoskService voskService;
+  final AIBrainWriter? brainWriter;
 
   /// Supplies the paired-devices list, so a "notify on my phone" preference
   /// can resolve "my phone" to an actual device.
@@ -26,6 +28,7 @@ class TalkScreen extends StatefulWidget {
     super.key,
     required this.modelService,
     required this.voskService,
+    this.brainWriter,
     required this.devicesProvider,
   });
 
@@ -137,6 +140,13 @@ class _TalkScreenState extends State<TalkScreen> {
       response = await _runner.run(action);
     }
     await _runner.speak(response);
+
+    // Feed this exchange into the AI's brain for memory.
+    widget.brainWriter?.recordTurn(
+      userSaid: input,
+      assistantReplied: response,
+      actionTaken: kind == NexusMessageKind.action ? response : null,
+    );
 
     if (!mounted) return;
     setState(() {
