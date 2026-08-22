@@ -22,15 +22,12 @@ class GraphPainter extends CustomPainter {
   final List<BrainNote> notes;
   final Map<String, BrainNote> _byTitle;
   final Set<String> _linkedNoteIds;
-  final ValueChanged<BrainNote>? onNodeTap;
 
   List<_GraphNode> _nodes = [];
   final Random _rng = Random(42);
 
-  GraphPainter({
-    required this.notes,
-    this.onNodeTap,
-  })  : _byTitle = {for (final n in notes) n.title.toLowerCase(): n},
+  GraphPainter({required this.notes})
+      : _byTitle = {for (final n in notes) n.title.toLowerCase(): n},
         _linkedNoteIds = _linkedIds(notes);
 
   static Set<String> _linkedIds(List<BrainNote> notes) {

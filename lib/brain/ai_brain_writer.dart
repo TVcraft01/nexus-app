@@ -110,12 +110,11 @@ class AIBrainWriter {
       }).join('\n');
 
       final prompt = qwenChatPrompt(
-        system: 'You are a memory system. Analyze this conversation and '
+        system:      'You are a memory system. Analyze this conversation and '
             'extract knowledge worth remembering. For each piece of '
             'knowledge, output a JSON object with:\n'
             '- "title": short descriptive title (max 5 words)\n'
-            '- "content": 1-3 sentence summary of what was learned\n'
-            '- "links": array of existing note titles this connects to (empty if none)\n\n'
+            '- "content": 1-3 sentence summary of what was learned\n\n'
             'Only extract genuinely useful facts, preferences, or context. '
             'Skip trivial acknowledgments, greetings, or one-off commands. '
             'If nothing is worth remembering, output an empty array [].\n\n'

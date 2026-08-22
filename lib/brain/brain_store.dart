@@ -137,15 +137,6 @@ class BrainStore extends ChangeNotifier {
   List<BrainNote> get notesByRecent =>
       List<BrainNote>.from(_notes)..sort((a, b) => b.modifiedAt.compareTo(a.modifiedAt));
 
-  /// All unique tags across all notes.
-  List<String> get allTags {
-    final tags = <String>{};
-    for (final note in _notes) {
-      tags.addAll(note.tags);
-    }
-    return tags.toList()..sort();
-  }
-
   /// Returns notes that link to [noteId] (incoming backlinks).
   List<BrainNote> backlinksFor(String noteId) {
     final note = _notes.where((n) => n.id == noteId).firstOrNull;
@@ -154,9 +145,6 @@ class BrainStore extends ChangeNotifier {
         .where((n) => n.id != noteId && n.outgoingLinks.contains(note.title))
         .toList();
   }
-
-  /// Returns the titles of all notes (for [[link]] autocomplete).
-  List<String> get noteTitles => _notes.map((n) => n.title).toList();
 
   /// Initializes the brain store: reads all .md files from the brain folder.
   Future<void> init() async {
@@ -207,57 +195,15 @@ class BrainStore extends ChangeNotifier {
     return note;
   }
 
-  /// Updates an existing note and persists it to disk.
-  Future<void> updateNote(
-    String noteId, {
-    String? title,
-    String? content,
-    List<String>? tags,
-  }) async {
+  /// Updates an existing note's content and persists it to disk.
+  Future<void> updateNote(String noteId, {String? content}) async {
     final index = _notes.indexWhere((n) => n.id == noteId);
     if (index == -1) return;
 
     final old = _notes[index];
-    final now = DateTime.now();
-
-    // If the title changed, update the file on disk (rename).
-    if (title != null && title != old.title) {
-      final oldFile = await _noteFile(old.id);
-      if (oldFile.existsSync()) await oldFile.delete();
-    }
-
-    final updated = old.copyWith(
-      title: title,
-      content: content,
-      tags: tags,
-      modifiedAt: now,
-    );
-
-    // If title changed, the id changes too.
-    final finalNote = title != null && title != old.title
-        ? BrainNote(
-            id: _sanitizeId(title),
-            title: title,
-            content: updated.content,
-            tags: updated.tags,
-            createdAt: updated.createdAt,
-            modifiedAt: now,
-          )
-        : updated;
-
-    _notes[index] = finalNote;
-    await _writeNote(finalNote);
-    notifyListeners();
-  }
-
-  /// Deletes a note from disk and the in-memory list.
-  Future<void> deleteNote(String noteId) async {
-    final index = _notes.indexWhere((n) => n.id == noteId);
-    if (index == -1) return;
-
-    final file = await _noteFile(_notes[index].id);
-    if (file.existsSync()) await file.delete();
-    _notes.removeAt(index);
+    final updated = old.copyWith(content: content, modifiedAt: DateTime.now());
+    _notes[index] = updated;
+    await _writeNote(updated);
     notifyListeners();
   }
 
