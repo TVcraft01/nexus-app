@@ -32,6 +32,9 @@ import 'read_aloud/read_aloud_service.dart';
 import 'settings/update_service.dart';
 import 'vault/vault_screen.dart';
 import 'read_aloud/read_aloud_widget.dart';
+import 'brain/brain_screen.dart';
+import 'brain/brain_store.dart';
+import 'brain/ai_brain_writer.dart';
 
 void main() {
   voskQuiet(); // silence Vosk's stderr logging on the C side.
@@ -68,6 +71,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   final _transferService = TransferService();
   final _modelService = ModelService();
   final _voskService = VoskService();
+  late final AIBrainWriter _brainWriter;
   StreamSubscription<ReceivedFile>? _receivedSub;
   StreamSubscription<TransferRecord>? _historySub;
   List<PairedDevice> _devices = [];
@@ -88,6 +92,11 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       devicesProvider: () => _pairingService.getPairedDevices(),
     );
     KnowledgeStore.instance.init();
+    BrainStore.instance.init();
+    _brainWriter = AIBrainWriter(
+      store: BrainStore.instance,
+      modelService: _modelService,
+    );
     ActionRegistry.instance.init();
     // Math notes: watches typed text for arithmetic expressions.
     MathNotesService.instance.init();
@@ -365,8 +374,10 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
           TalkScreen(
             modelService: _modelService,
             voskService: _voskService,
+            brainWriter: _brainWriter,
             devicesProvider: () => _pairingService.getPairedDevices(),
           ),
+          const BrainScreen(),
           const VaultScreen(),
           SettingsScreen(
             devices: _devices,
@@ -392,6 +403,10 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
           NavigationDestination(
             icon: Icon(Icons.mic_none),
             label: 'Talk',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.psychology_outlined),
+            label: 'Brain',
           ),
           NavigationDestination(
             icon: Icon(Icons.lock_outline),

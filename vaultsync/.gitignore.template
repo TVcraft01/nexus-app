@@ -1,0 +1,32 @@
+# Obsidian workspace state (device-local, causes ping-pong)
+.obsidian/workspace.json
+.obsidian/workspace-mobile.json
+.obsidian/workspace.json.bak
+.obsidian/workspace.json.tmp
+
+# Obsidian cache
+.obsidian/cache
+.obsidian/cache.json
+.obsidian/graph.json
+.obsidian/starred.json
+.obsidian/search.json
+.obsidian/bookmarks.json
+
+# Obsidian plugins (install on each machine, don't sync binaries)
+.obsidian/plugins/
+
+# Obsidian themes (install on each machine)
+.obsidian/themes/
+
+# OS / editor junk
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# Trash (Obsidian's built-in trash)
+.trash/
+
+# vaultsync conflict files — tracked but ignored from auto-commit
+*.conflict-*.md

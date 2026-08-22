@@ -1,0 +1,17 @@
+{
+  "name": "vaultsync",
+  "version": "1.0.0",
+  "description": "Git-based Obsidian vault sync with auto-commit, conflict-safe pull, and status reporting.",
+  "type": "module",
+  "bin": {
+    "vaultsync": "./vaultsync.js"
+  },
+  "scripts": {
+    "start": "node vaultsync.js start",
+    "status": "node vaultsync.js status"
+  },
+  "dependencies": {
+    "chokidar": "^4.0.0",
+    "simple-git": "^3.27.0"
+  }
+}
